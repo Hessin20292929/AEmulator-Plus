@@ -101,11 +101,13 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
     fun cameraVisible(visible: Boolean) { camera.visible(visible) }
     val bluetoothSupported get() = engine == Engine.KK && img.api in 9..25 && !recoveryMode && !nativeUi
     private val bluetooth = BluetoothBridge(ctx, paths, { settings.bluetooth && bluetoothSupported }, ::log)
+    val wifiSupported get() = WifiEmu.supported(engine, img.api, recoveryMode, nativeUi)
     // 2.x пишет в /dev/eac через AudioHardwareGeneric на 44,1 кГц, HAL 4.x движка — на 48 кГц
     val audio = AudioOut(paths, ::log, if (img.api < 14) 44100 else AudioOut.RATE,
         if (TreeFixer.isMtkAudio(paths.root)) "dev/aemu_pcm" else "dev/eac")
     val ril = RilStub(paths, ::log, img.settings.imei.ifBlank { VmSettings.DEFAULT_IMEI }, img.api,
-        VmSettings.cleanBaseband(img.settings.baseband).ifBlank { VmSettings.DEFAULT_BASEBAND })
+        VmSettings.cleanBaseband(img.settings.baseband).ifBlank { VmSettings.DEFAULT_BASEBAND },
+        img.settings.networkType)
     val vold = VoldStub(paths, img.sdcardPath, ::log, others = img.volumes)
     var onFrame: (() -> Unit)? = null
     val frames = FrameBell(paths, ::log) { onFrame?.invoke() }
@@ -482,7 +484,7 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
         if (!s.hwui) overrides["debug.hwui.renderer"] = "skia"
         // PBO для текстур шрифтов (hwui 4.4+ на GLES3) ломают часть драйверов (Mali) — грузим текстуры напрямую
         if (HostInfo.gpu().contains("mali")) overrides["ro.hwui.use_gpu_pixel_buffers"] = "false"
-        if (img.api in 19..20) overrides["persist.sys.dalvik.vm.lib"] = "libdvm.so"
+        if (img.api in 19..20 && !isLpw39) overrides["persist.sys.dalvik.vm.lib"] = "libdvm.so"
         // Glass (4.0.x): CameraService's Gcam (HDR+) path pre-allocates 2592x1944 buffers in the OMAP format 0x100
         // (TI NV12); the emulated gralloc refuses it (EINVAL), dequeueBuffer fails and libgui then dereferences a null
         // buffer: mediaserver dies with SIGSEGV on the first camera open. Without Gcam the plain HAL path is used.
@@ -504,6 +506,21 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
                 overrides["dalvik.vm.extra-opts"] = "-Xnorelocate"
                 // installd's dex2oat starts its own runtime: without this it tries patchoat too and fails every app
                 overrides["dalvik.vm.dex2oat-flags"] = overrides["dalvik.vm.dex2oat-flags"] + " --runtime-arg -Xnorelocate"
+            }
+        }
+        // Android L preview (API 20, build LPW39): ART only. Its libart has no -Xrelocate/-Xnorelocate and there is no patchoat,
+        // so the 5.0 settings above must NOT be applied (an unknown runtime option aborts zygote at once).
+        // The firmware has no pre-built boot image, so zygote runs dex2oat on first boot. Under qemu that dex2oat dies in
+        // art/runtime/class_linker.cc:3371 (Check failed: IsExceptionPending, android.util.Log) while running
+        // SQLiteDebug.<clinit> at compile time. Initialising only the core-library classes of framework.jar's preloaded-classes
+        // (java.*, libcore.*, ...) avoids that; framework classes are then simply loaded lazily from the dex files.
+        if (isLpw39 && img.api == 20) {
+            overrides["dalvik.vm.dex2oat-flags"] = "--compiler-filter=interpret-only"
+            // dex2oat finishes the image and then aborts in exit() (libsigchain: "Unable to find next sigaction"); see Lpw39Dex2oat
+            if (Lpw39Dex2oat.install(paths.root)) log("LPW39: dex2oat wrapped (SIGABRT after a complete write counts as success)")
+            if (writeLpw39ImageClasses()) {
+                // later options win over the --image-classes* that libart puts on the dex2oat command line
+                overrides["dalvik.vm.image-dex2oat-flags"] = "--image-classes-zip=/system/framework/aemu-imgclasses.zip --image-classes=preloaded-classes"
             }
         }
         // порты MIUI правят framework на smali так, что Dalvik-верификатор отвергает классы ядра
@@ -574,7 +591,8 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
             log("audio: MediaTek, emulator HAL via /dev/aemu_pcm")
         } else { audio.makeFifo(); audio.start() }
         events.start()
-        if (img.api >= 21) logd.start()
+        // LPW39 (L preview, API 20) already logs through logd's /dev/socket/logdw; without the host receiver every ART message is lost
+        if (img.api >= 21 || isLpw39) logd.start()
         lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb).also { it.start() }
         val netCfg = if (s.netProxy) net.start() else GuestRunner.NetConfig()
         runner.sdcardHost = sd
@@ -609,6 +627,10 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
                    else BootMediaServices.withLegacyLogo(basePlan, paths.root, img.api)
         if (plan.any { it.name == BootMediaServices.LEGACY_LOGO }) log("boot logo: playlogos1 will run (Samsung 2.x boot animation and sound)")
         var glDone = false
+        val wifiOn = settings.wifi && wifiSupported && File(paths.root, WifiEmu.JAR_PATH).isFile
+        if (settings.wifi && wifiSupported && !wifiOn) log("wifi: ${WifiEmu.JAR_NAME} is not installed (build guest-wifi/build.sh), the guest keeps its normal network")
+        WifiEmu.write(paths.root, settings, wifiOn)
+        if (wifiOn) log("wifi: emulated network \"${settings.wifiSsid}\" (${if (WifiEmu.secured(settings)) "WPA2" else "open"})")
         for (svc in plan) {
             if (stopping) return
             // GL-мост должен ждать гостя до SurfaceFlinger/zygote
@@ -618,7 +640,7 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
             // Samsung: native SensorService/libsensorhub wait for "sensorhubservice" forever; a placeholder binder ends the wait
             if (svc.name == "zygote" && engine == Engine.KK && File(paths.root, "system/framework/aemu-sensorhub.jar").isFile) {
                 synchronized(procs) { procs.remove("aemu-sensorhub") }?.let { runCatching { it.destroyForcibly() } }
-                startService(GuestService("aemu-sensorhub", listOf("/system/bin/app_process",
+                startService(GuestService("aemu-sensorhub", listOf(appProcess,
                     "-Djava.class.path=/system/framework/aemu-sensorhub.jar", "/system/bin",
                     "app.aemu.stub.SensorHubStub", "sensorhubservice"), optional = true))
             }
@@ -629,14 +651,21 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
                 // Android 4.4 (API 19, incl. the KKWT Wear image): the real bridge client; everything else keeps the placeholder
                 val bridgeJar = img.api == 19 && File(paths.root, "system/framework/aemu-bt.jar").isFile
                 synchronized(procs) { procs.remove("aemu-bt") }?.let { runCatching { it.destroyForcibly() } }
-                startService(GuestService("aemu-bt", listOf("/system/bin/app_process",
+                startService(GuestService("aemu-bt", listOf(appProcess,
                     "-Djava.class.path=/system/framework/${if (bridgeJar) "aemu-bt.jar" else "aemu-stubs.jar"}", "/system/bin",
                     if (bridgeJar) "app.aemu.stub.BtService" else "app.aemu.stub.BtStub", btName), optional = true))
             }
+            // emulated Wi-Fi: the guest service answers WifiManager as a connected access point and, on 5.0+, registers the
+            // Wi-Fi network itself (instead of the Ethernet placeholder below)
+            if (svc.name == "zygote" && wifiOn) {
+                synchronized(procs) { procs.remove("aemu-wifi") }?.let { runCatching { it.destroyForcibly() } }
+                startService(GuestService("aemu-wifi", listOf(appProcess,
+                    "-Djava.class.path=/${WifiEmu.JAR_PATH}", "/system/bin", "app.aemu.stub.WifiStub"), optional = true))
+            }
             // 5.0–7.x: a registered network, otherwise ConnectivityService says "no active network" and browsers stay offline
-            if (svc.name == "zygote" && img.api in 21..25 && engine == Engine.KK && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
+            if (svc.name == "zygote" && img.api in 21..25 && !wifiOn && engine == Engine.KK && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 synchronized(procs) { procs.remove("aemu-net") }?.let { runCatching { it.destroyForcibly() } }
-                startService(GuestService("aemu-net", listOf("/system/bin/app_process",
+                startService(GuestService("aemu-net", listOf(appProcess,
                     "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.NetStub"), optional = true))
             }
             if (svc.name == BootMediaServices.LEGACY_LOGO) { LegacyLogoPatch.apply(paths.root, ::log); LegacyLogoPatch.provideHeadsetState(paths.root, ::log) }
@@ -653,7 +682,7 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
             val setupRunner = guestRunner
             Thread({
                 if (!stopping) runCatching {
-                    val (code, output) = setupRunner.run(listOf("/system/bin/app_process",
+                    val (code, output) = setupRunner.run(listOf(appProcess,
                         "-Djava.class.path=/system/framework/aemu-setup.jar", "/system/bin",
                         "app.aemu.setup.SetupCtl", if (settings.skipSetupWizard) "skip" else "restore"), 180_000,
                         mapOf("DHD_UID" to "1000", "DHD_GID" to "1000"))
@@ -666,7 +695,7 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
             val googleRunner = guestRunner
             Thread({
                 if (!stopping) runCatching {
-                    val (code, output) = googleRunner.run(listOf("/system/bin/app_process",
+                    val (code, output) = googleRunner.run(listOf(appProcess,
                         "-Djava.class.path=/system/framework/aemu-setup.jar", "/system/bin", "app.aemu.setup.GoogleCtl",
                         if (settings.disableGoogleApps) "disable" else "restore"), 180_000,
                         mapOf("DHD_UID" to "1000", "DHD_GID" to "1000"))
@@ -734,6 +763,33 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
      * netd then got only its "netd" socket, no "dnsproxyd", and exited at once. Such an image gets its plan rebuilt
      * from the rc files in the tree on every boot, so it does not have to be imported again.
      */
+    /** LPW39: writes system/framework/aemu-imgclasses.zip holding a core-library-only copy of framework.jar's preloaded-classes. */
+    private fun writeLpw39ImageClasses(): Boolean = runCatching {
+        val fw = File(paths.root, "system/framework/framework.jar")
+        val out = File(paths.root, "system/framework/aemu-imgclasses.zip")
+        val keep = listOf("java.", "javax.", "libcore.", "dalvik.", "sun.", "org.apache.harmony.", "com.android.org.",
+            "org.json.", "org.w3c.", "org.xml.", "org.kxml2.", "org.xmlpull.", "org.apache.xml.", "junit.")
+        val text = java.util.zip.ZipFile(fw).use { z ->
+            val e = z.getEntry("preloaded-classes") ?: return@runCatching false
+            z.getInputStream(e).bufferedReader().readText()
+        }
+        val lines = text.lineSequence().map { it.trim() }.filter { l -> l.isNotEmpty() && !l.startsWith("#") && keep.any { l.startsWith(it) } }.toList()
+        if (lines.isEmpty()) return@runCatching false
+        java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { zo ->
+            zo.putNextEntry(java.util.zip.ZipEntry("preloaded-classes"))
+            zo.write((lines.joinToString("\n") + "\n").toByteArray())
+            zo.closeEntry()
+        }
+        log("LPW39: boot image classes limited to the core libraries (${lines.size} of the preloaded classes)")
+        true
+    }.getOrDefault(false)
+
+    /**
+     * Android L preview build LPW39 (Google ADT-1 / molly). It reports API 20 but, unlike 4.4W (also API 20), is ART-only:
+     * every L-preview workaround is keyed on this exact ro.build.id so Dalvik-based 4.4 / 4.4W images are untouched.
+     */
+    private val isLpw39: Boolean by lazy { img.buildId.trim().equals("LPW39", ignoreCase = true) }
+
     private val bootServices: List<GuestService> by lazy {
         runCatching {
             if (!File(paths.root, "advanced_meta_init.rc").isFile) return@runCatching img.services
@@ -747,6 +803,9 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
             }
         }.getOrDefault(img.services)
     }
+
+    /** app_process, or app_process32 on firmware that has only that. */
+    private val appProcess: String get() = AppProcess.path(paths.root)
 
     private fun startService(svc: GuestService, propsFile: File? = null) {
         if (!File(paths.root, svc.argv.first().removePrefix("/")).isFile) {
@@ -762,9 +821,10 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
         val argv = if (svc.name == "zygote" && !settings.jit && img.runtime == "dalvik")
             svc.argv.take(1) + "-Xint:fast" + svc.argv.drop(1) else svc.argv
         // отладка: файл run/strace.<служба> включает трассировку системных вызовов qemu
-        // TEMPORARY (Berlin bring-up): always trace zygote, system_server dies with signal 31 at "Alarm Manager" and nothing
-        // else says which syscall it was. Remove once that is solved.
-        if (File(paths.bin, "strace.${svc.name}").exists() || svc.name == "zygote") extra["QEMU_STRACE"] = "1"
+        // tracing slows a service down and fills its log: only for the services named in the VM settings
+        // ("mediaserver,zygote"), or by the debugging file run/strace.<service>
+        if (svc.name in VmSettings.straceNames(settings.straceServices) || File(paths.bin, "strace.${svc.name}").exists())
+            extra["QEMU_STRACE"] = "1"
         spawn(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
     }
 
@@ -1167,7 +1227,7 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
             val pid = d.name.toIntOrNull() ?: return@forEach
             val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
             // app_process с aemu-stubs.jar — наша заглушка bluetooth_manager, не приложение зиготы
-            if (cmd.contains(marker) && cmd.contains("/system/bin/app_process") && !cmd.contains("aemu-stubs.jar") && !cmd.contains("aemu-bt.jar") && !cmd.contains("aemu-sensorhub.jar")) {
+            if (cmd.contains(marker) && cmd.contains("/system/bin/app_process") && !cmd.contains("aemu-stubs.jar") && !cmd.contains("aemu-bt.jar") && !cmd.contains(WifiEmu.JAR_NAME) && !cmd.contains("aemu-sensorhub.jar")) {
                 runCatching { AProcess.sendSignal(pid, 9) }; n++
             }
         }
@@ -1224,10 +1284,18 @@ class GuestVm(val ctx: Context, val img: GuestImage, val lowPowerBoot: Boolean =
 
     fun bootSeconds(): Long = if (bootAt == 0L) 0 else ((if (bootDoneAt > 0) bootDoneAt else System.currentTimeMillis()) - bootAt) / 1000
 
-    fun guestShell(cmd: String, timeoutMs: Long = 60_000): String =
-        guestRunner.run(listOf("/system/bin/sh", "-c", cmd), timeoutMs).second
+    /**
+     * One-shot `sh -c` in the guest. Same setup as the adb shell: /system/bin first in PATH and shell functions for
+     * script tools (am, pm, content, settings...), because qemu cannot exec a script directly and sh then reports
+     * "<tool>: not found".
+     */
+    fun guestShell(cmd: String, timeoutMs: Long = 60_000): String {
+        val r = guestRunner
+        val path = GuestRunner.shellPath(r.env()["PATH"])
+        return r.run(listOf("/system/bin/sh", "-c", GuestRunner.scriptFns(paths.root) + cmd), timeoutMs, mapOf("PATH" to path)).second
+    }
 
-    fun rotateGuest(): Pair<Int, String> = guestRunner.run(listOf("/system/bin/app_process",
+    fun rotateGuest(): Pair<Int, String> = guestRunner.run(listOf(appProcess,
         "-Djava.class.path=/system/framework/aemu-setup.jar", "/system/bin", "app.aemu.setup.RotationCtl"),
         15_000, mapOf("DHD_UID" to "1000", "DHD_GID" to "1000"))
 

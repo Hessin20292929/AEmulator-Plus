@@ -46,7 +46,7 @@ internal object DexStringPatch {
         (d[o].toInt() and 0xff) or ((d[o + 1].toInt() and 0xff) shl 8) or ((d[o + 2].toInt() and 0xff) shl 16) or ((d[o + 3].toInt() and 0xff) shl 24)
 
     /** (offset, end) of the dex inside [d], or null when the file is neither a dex nor an odex. */
-    private fun region(d: ByteArray): Pair<Int, Int>? {
+    internal fun region(d: ByteArray): Pair<Int, Int>? {
         if (d.size < 120) return null
         val plain = d[0] == 'd'.code.toByte() && d[1] == 'e'.code.toByte() && d[2] == 'x'.code.toByte() && d[3] == '\n'.code.toByte()
         val odex = d[0] == 'd'.code.toByte() && d[1] == 'e'.code.toByte() && d[2] == 'y'.code.toByte() && d[3] == '\n'.code.toByte()
@@ -60,7 +60,7 @@ internal object DexStringPatch {
         return off to end
     }
 
-    private fun adler(d: ByteArray, r: Pair<Int, Int>): Int =
+    internal fun adler(d: ByteArray, r: Pair<Int, Int>): Int =
         Adler32().also { it.update(d, r.first + 12, r.second - r.first - 12) }.value.toInt()
 
     private fun swap(d: ByteArray, a: ByteArray, b: ByteArray): Boolean {

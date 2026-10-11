@@ -40,6 +40,7 @@ object DiagExport {
                 entry(zip, "guest-logcat.txt") { o ->
                     runCatching { o.bufferedWriter().apply { GuestLog.writeExport(vm.paths.root, vm.paths.bin, this); flush() } }
                 }
+                entry(zip, "guest-sms-db.txt") { it.write(smsDb(ctx, vm).toByteArray()) }
                 vm.paths.bin.listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.forEach { f -> addFile(zip, "run/${f.name}", f) }
                 // files the factory test program writes itself
                 listOf("cache/tki/tki.log", "data/mmi_ip.png", "data/local/tmp/mmi.log").forEach { rel ->
@@ -164,6 +165,64 @@ object DiagExport {
         appendLine()
         appendLine("-- run dir --")
         p.bin.listFiles()?.sortedBy { it.name }?.forEach { appendLine("${it.name}: ${kind(it)} ${it.length()} bytes, ${java.util.Date(it.lastModified())}") }
+    }
+
+    /**
+     * What the guest's messaging provider actually stored: counts and the newest rows of sms / threads. Answers "was the
+     * injected SMS saved?" without relying on the firmware's (often silent) logging. Works on a copy of the database.
+     */
+    private fun smsDb(ctx: Context, vm: GuestVm): String = buildString {
+        val root = vm.paths.root
+        val rels = listOf(
+            "dbdata/databases/com.android.providers.telephony/mmssms.db",
+            "data/data/com.android.providers.telephony/databases/mmssms.db",
+        )
+        val src = rels.map { File(root, it) }.firstOrNull { it.isFile }
+        if (src == null) { appendLine("mmssms.db: not found in ${rels.joinToString()}"); return@buildString }
+        appendLine("source: ${src.path.removePrefix(root.path)} (${src.length()} bytes, ${java.util.Date(src.lastModified())})")
+        val tmp = File(ctx.cacheDir, "diag-mmssms.db")
+        runCatching {
+            for (suffix in listOf("", "-journal", "-wal", "-shm")) {
+                val from = File(src.path + suffix); val to = File(tmp.path + suffix)
+                to.delete()
+                if (from.isFile) from.copyTo(to, overwrite = true)
+            }
+            android.database.sqlite.SQLiteDatabase.openDatabase(tmp.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use { d ->
+                fun table(name: String, sql: String) {
+                    appendLine()
+                    appendLine("-- $name --")
+                    runCatching {
+                        d.rawQuery(sql, null).use { c ->
+                            appendLine(c.columnNames.joinToString(" | "))
+                            while (c.moveToNext()) appendLine((0 until c.columnCount).joinToString(" | ") { i -> c.getString(i) ?: "null" })
+                        }
+                    }.onFailure { appendLine("[$name failed: $it]") }
+                }
+                table("counts", "SELECT (SELECT count(*) FROM sms) AS sms, (SELECT count(*) FROM threads) AS threads, " +
+                    "(SELECT count(*) FROM canonical_addresses) AS addresses, (SELECT count(*) FROM pdu) AS pdu")
+                table("sms (newest 30)", "SELECT _id, thread_id, address, date, type, read, seen, status, length(body) AS body_len, substr(body,1,40) AS body " +
+                    "FROM sms ORDER BY _id DESC LIMIT 30")
+                table("threads", "SELECT * FROM threads ORDER BY _id DESC LIMIT 20")
+                table("schema (tables, triggers)", "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','trigger') ORDER BY type, name")
+                // the insert Messaging performs for an incoming SMS, on the COPY and rolled back: shows the exact error, if any
+                appendLine()
+                appendLine("-- test insert into sms (copy, rolled back) --")
+                d.beginTransaction()
+                try {
+                    val tid = runCatching { d.rawQuery("SELECT _id FROM threads ORDER BY _id DESC LIMIT 1", null).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } }.getOrDefault(0L)
+                    val cv = android.content.ContentValues().apply {
+                        put("thread_id", tid); put("address", "+10000000000"); put("date", 1791723429000L)
+                        put("read", 0); put("type", 1); put("body", "diag test")
+                    }
+                    val row = d.insertOrThrow("sms", null, cv)
+                    appendLine("insert OK, rowid=$row (thread_id=$tid)")
+                    table("threads after the test insert (triggers)", "SELECT _id, message_count, snippet, unread_count FROM threads WHERE _id=$tid")
+                } catch (t: Throwable) {
+                    appendLine("insert FAILED: $t")
+                } finally { d.endTransaction() }
+            }
+        }.onFailure { appendLine("[could not read the copy: $it]") }
+        for (suffix in listOf("", "-journal", "-wal", "-shm")) File(tmp.path + suffix).delete()
     }
 
     private fun kind(f: File): String = runCatching {

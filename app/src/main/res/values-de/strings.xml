@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">Katalog konnte nicht geladen werden: %1$s</string>
     <string name="catalog_warnings">Ungültige oder unvollständige Katalogdaten in den Zeilen: %1$s</string>
     <string name="browser_unavailable">Kein Browser zum Öffnen dieses Links verfügbar.</string>
-    <string name="experimental_activated">Experimentelle Funktionen aktiviert!</string>
-    <string name="experimental_locked">Die experimentellen Kameraeinstellungen sind gesperrt. Tippe 42-mal auf den Titel „AEmulator Plus“, um sie freizuschalten.</string>
     <string name="m_minimize">Minimieren</string>
     <string name="open_vm">Öffnen</string>
     <string name="vm_restarting">Virtuelle Maschine wird neu gestartet…</string>

@@ -487,7 +487,6 @@ private fun ImportCard(s: ImportState, onCancel: () -> Unit, onDismiss: () -> Un
 @OptIn(ExperimentalFoundationApi::class)
 private fun ImageCard(img: GuestImage, onStart: () -> Unit, onSettings: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, baseName: String? = null, active: Boolean = false) {
     val ctx = LocalContext.current
-    val experimental = experimentalFeaturesEnabled()
     val lowPowerLabel = stringResource(R.string.lpm_start)
     Card(shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(20.dp)) {
@@ -520,8 +519,8 @@ private fun ImageCard(img: GuestImage, onStart: () -> Unit, onSettings: () -> Un
                 Surface(shape = ButtonDefaults.shape, color = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.height(48.dp).combinedClickable(role = Role.Button,
-                        onClick = onStart, onLongClickLabel = if (experimental && !active) lowPowerLabel else null,
-                        onLongClick = if (experimental && !active) ({
+                        onClick = onStart, onLongClickLabel = if (!active) lowPowerLabel else null,
+                        onLongClick = if (!active) ({
                             VmActivity.start(ctx, img.id, lowPower = true)
                         }) else null)) {
                     Row(Modifier.padding(ButtonDefaults.ButtonWithIconContentPadding), verticalAlignment = Alignment.CenterVertically) {

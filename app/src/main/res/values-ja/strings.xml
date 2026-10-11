@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">カタログを読み込めませんでした：%1$s</string>
     <string name="catalog_warnings">次の行にカタログデータの不正または不足があります：%1$s</string>
     <string name="browser_unavailable">このリンクを開けるブラウザがありません。</string>
-    <string name="experimental_activated">実験的機能を有効にしました！</string>
-    <string name="experimental_locked">実験的なカメラ設定はロックされています。AEmulator Plus のタイトルを42回タップするとロックが解除されます。</string>
     <string name="m_minimize">最小化</string>
     <string name="open_vm">開く</string>
     <string name="vm_restarting">仮想マシンを再起動中…</string>

@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">Não foi possível carregar o catálogo: %1$s</string>
     <string name="catalog_warnings">Dados do catálogo inválidos ou incompletos nas linhas: %1$s</string>
     <string name="browser_unavailable">Nenhum navegador disponível para abrir este link.</string>
-    <string name="experimental_activated">Recursos experimentais ativados!</string>
-    <string name="experimental_locked">As configurações experimentais da câmera estão bloqueadas. Toque 42 vezes no título AEmulator Plus para desbloqueá-las.</string>
     <string name="m_minimize">Minimizar</string>
     <string name="open_vm">Abrir</string>
     <string name="vm_restarting">Reiniciando a máquina virtual…</string>

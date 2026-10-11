@@ -26,20 +26,40 @@ class RilStub(
     private val imei: String = VmSettings.DEFAULT_IMEI,
     private val api: Int = 19,
     private val baseband: String = VmSettings.DEFAULT_BASEBAND,
+    networkType: Int = NetworkType.DEFAULT,
 ) {
     @Volatile var answered = 0L
         private set
 
     private val server = UnixServer(paths.socket("rild"), "rild") { c -> serveOne(c) }
     private val operator: Pair<String, String> by lazy { pickOperator() }   // mcc to mnc
-    /** Samsung's 4.3 RIL.java reads a call type (CallDetails) after isVoicePrivacy */
+    /** Samsung's RIL.java reads an extra call type int (CallDetails) around isVoicePrivacy, on 2.3.6 and 4.x alike */
     private val samsung: Boolean by lazy {
         runCatching { File(paths.root, "system/build.prop").readText().lowercase().contains("ro.product.manufacturer=samsung") }
             .getOrDefault(false)
     }
 
+    /** radio technology reported in the voice/data registration state (ServiceState.RIL_RADIO_TECHNOLOGY_*) */
+    @Volatile var networkType: Int = NetworkType.sanitize(networkType, api)
+        private set
+
+    /** Changes the reported network on the fly: telephony is told to poll the registration state again. False when telephony is not up. */
+    fun setNetworkType(tech: Int): Boolean {
+        networkType = NetworkType.sanitize(tech, api)
+        val o = out ?: return false
+        unsol(o, UNSOL_RESPONSE_VOICE_NETWORK_STATE_CHANGED, ByteArray(0))
+        return true
+    }
+
     fun serve() = server.start(log)
     fun stop() = server.stop()
+
+    /**
+     * RIL_RadioState for "radio on". AOSP 4.0+ has ON = 10, but Samsung's 4.0.x RIL.java stops at the 2.3 list and throws
+     * "Unrecognized RIL_RadioState: 10" (GT-I9300 4.0.4: com.android.phone restarted in a loop until the modem was
+     * switched to "radio unavailable", so fake calls failed). Those builds take SIM_READY (4) as "on".
+     */
+    private val radioOnState: Int get() = if (api < 14 || (samsung && api <= 15)) 4 else 10
 
     @Volatile private var out: OutputStream? = null
     /** fake call: number and CallState (4 incoming, 0 active); null when idle */
@@ -52,6 +72,72 @@ class RilStub(
         unsol(o, UNSOL_RESPONSE_CALL_STATE_CHANGED, ByteArray(0))
         unsol(o, UNSOL_CALL_RING, ByteArray(0))
         return true
+    }
+
+    /**
+     * Incoming SMS from [from], like "sms send" in the SDK emulator console: an SMS-DELIVER PDU goes to the guest's
+     * telephony as RIL_UNSOL_RESPONSE_NEW_SMS, so the stock messaging app (TouchWiz included) gets it the normal way,
+     * with no shell and no `content` tool. False when telephony is not up.
+     */
+    fun deliverSms(from: String, body: String): Boolean {
+        val o = out ?: return false
+        unsol(o, UNSOL_RESPONSE_NEW_SMS, str(smsDeliverPdu(from, body)))
+        return true
+    }
+
+    /** hex of SMSC (none) + SMS-DELIVER TPDU; GSM 7-bit when the text allows it, UCS-2 otherwise */
+    private fun smsDeliverPdu(from: String, body: String): String {
+        val sb = StringBuilder("00")                                  // no SMSC
+        sb.append("04")                                               // SMS-DELIVER, no more messages
+        val num = from.trim()
+        val digits = num.filter { it.isDigit() }
+        if (digits.isNotEmpty() && num.all { it.isDigit() || it == '+' || it == '-' || it == ' ' }) {
+            sb.append("%02X".format(digits.length.coerceAtMost(20)))
+            sb.append(if (num.startsWith("+")) "91" else "81")
+            sb.append(bcd(digits.take(20)))
+        } else {                                                      // alphanumeric sender
+            val name = num.take(11).map { if (it in GSM7_SAFE) it else '?' }.joinToString("")
+            val packed = gsm7Pack(name)
+            sb.append("%02X".format((name.length * 7 + 3) / 4)).append("D0").append(hex(packed))
+        }
+        sb.append("00")                                               // PID
+        val text = body.ifEmpty { " " }
+        val gsm = text.all { it in GSM7_SAFE }
+        sb.append(if (gsm) "00" else "08")                            // DCS
+        val now = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        sb.append(bcd("%02d%02d%02d%02d%02d%02d".format(now.get(java.util.Calendar.YEAR) % 100,
+            now.get(java.util.Calendar.MONTH) + 1, now.get(java.util.Calendar.DAY_OF_MONTH),
+            now.get(java.util.Calendar.HOUR_OF_DAY), now.get(java.util.Calendar.MINUTE), now.get(java.util.Calendar.SECOND))))
+        sb.append("00")                                               // timezone UTC
+        if (gsm) {
+            val t = text.take(160)
+            sb.append("%02X".format(t.length)).append(hex(gsm7Pack(t)))
+        } else {
+            val ud = text.take(70).toByteArray(Charsets.UTF_16BE)
+            sb.append("%02X".format(ud.size)).append(hex(ud))
+        }
+        return sb.toString()
+    }
+
+    /** semi-octet BCD, nibbles swapped, padded with F */
+    private fun bcd(d: String): String {
+        val s = if (d.length % 2 == 1) d + "F" else d
+        return s.chunked(2).joinToString("") { it.reversed() }
+    }
+
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02X".format(it.toInt() and 0xff) }
+
+    private fun gsm7Pack(s: String): ByteArray {
+        val out = ByteArray((s.length * 7 + 7) / 8)
+        s.forEachIndexed { i, c ->
+            val bit = i * 7
+            val v = c.code and 0x7f
+            val idx = bit / 8
+            val sh = bit % 8
+            out[idx] = (out[idx].toInt() or (v shl sh)).toByte()
+            if (sh > 1) out[idx + 1] = (out[idx + 1].toInt() or (v shr (8 - sh))).toByte()
+        }
+        return out
     }
 
     private val connects = ArrayDeque<Long>()
@@ -92,6 +178,7 @@ class RilStub(
             if (request == RIL_REQUEST_RADIO_POWER) afterPower(o, b)
             if (request == RIL_REQUEST_ANSWER || request in HANGUPS) unsol(o, UNSOL_RESPONSE_CALL_STATE_CHANGED, ByteArray(0))
         }
+        if (out === o) { out = null; call = null }
     }
 
     /** the old stub: radio off, identifiers only — keeps a firmware alive that cannot use the modem */
@@ -130,8 +217,8 @@ class RilStub(
             RIL_REQUEST_LAST_CALL_FAIL_CAUSE -> 0 to ints(16)   // normal clearing
             RIL_REQUEST_GET_IMSI -> 0 to str(mcc + mnc + "0123456789".take(15 - mcc.length - mnc.length))
             RIL_REQUEST_SIGNAL_STRENGTH -> 0 to ints(20, 99, -1, -1, -1, -1, -1, 99, -1, -1, -1, -1, -1)
-            RIL_REQUEST_VOICE_REGISTRATION_STATE -> 0 to strs("1", "0001", "00000001", "3")
-            RIL_REQUEST_DATA_REGISTRATION_STATE -> 0 to strs("1", "0001", "00000001", "3", "0", "1")
+            RIL_REQUEST_VOICE_REGISTRATION_STATE -> 0 to strs("1", "0001", "00000001", networkType.toString())
+            RIL_REQUEST_DATA_REGISTRATION_STATE -> 0 to strs("1", "0001", "00000001", networkType.toString(), "0", "1")
             RIL_REQUEST_OPERATOR -> 0 to strs(OPERATOR_NAME, OPERATOR_NAME, mcc + mnc)
             RIL_REQUEST_SETUP_DATA_CALL -> 0 to dataCall(single = true)
             RIL_REQUEST_DATA_CALL_LIST -> 0 to dataCall(single = false)
@@ -143,7 +230,8 @@ class RilStub(
             RIL_REQUEST_QUERY_NETWORK_SELECTION_MODE -> 0 to ints(0)
             RIL_REQUEST_GET_PREFERRED_NETWORK_TYPE -> 0 to ints(0)
             RIL_REQUEST_GET_NEIGHBORING_CELL_IDS -> 0 to le(0)
-            RIL_REQUEST_VOICE_RADIO_TECH -> 0 to ints(3)
+            RIL_REQUEST_VOICE_RADIO_TECH -> 0 to ints(networkType)
+            RIL_REQUEST_SMS_ACKNOWLEDGE -> 0 to ByteArray(0)
             RIL_REQUEST_GET_SMSC_ADDRESS -> 0 to str("+10000000000")
             RIL_REQUEST_QUERY_FACILITY_LOCK -> 0 to ints(0)
             RIL_REQUEST_SEND_SMS, RIL_REQUEST_SEND_SMS_EXPECT_MORE -> 0 to (le(1) + str(null) + le(-1))
@@ -159,7 +247,7 @@ class RilStub(
     private fun afterPower(o: OutputStream, args: ByteBuffer) {
         val on = runCatching { args.position(12); args.getInt() != 0 }.getOrDefault(true)
         // 4.0+ knows only OFF/UNAVAILABLE/ON(10); 2.3 has "SIM ready" (4) instead of ON
-        unsol(o, UNSOL_RADIO_STATE_CHANGED, le(if (!on) 0 else if (api >= 14) 10 else 4))
+        unsol(o, UNSOL_RADIO_STATE_CHANGED, le(if (!on) 0 else radioOnState))
         if (on) {
             unsol(o, UNSOL_RESPONSE_SIM_STATUS_CHANGED, ByteArray(0))
             unsol(o, UNSOL_RESPONSE_VOICE_NETWORK_STATE_CHANGED, ByteArray(0))
@@ -174,7 +262,7 @@ class RilStub(
         b.write(le(0)); b.write(le(1)); b.write(le(0))         // not multiparty, mobile terminated, als
         b.write(le(1))                                         // voice
         b.write(le(0))                                         // no voice privacy
-        if (samsung && api >= 18) b.write(le(0))               // Samsung 4.3: CallDetails call type (voice)
+        if (samsung) b.write(le(0))                            // Samsung (2.3.6, 4.0.4, 4.3 alike): extra call type int before the number
         b.write(str(number)); b.write(le(0))                   // number, presentation allowed
         b.write(str(null)); b.write(le(2))                     // no name, presentation unknown
         b.write(le(0))                                         // no UUS info
@@ -252,7 +340,11 @@ class RilStub(
         private const val OPERATOR_NAME = "AEmulator"
         private const val UNSOL_RADIO_STATE_CHANGED = 1000
         private const val UNSOL_RESPONSE_CALL_STATE_CHANGED = 1001
+        private const val UNSOL_RESPONSE_NEW_SMS = 1003
         private const val UNSOL_CALL_RING = 1018
+        private const val RIL_REQUEST_SMS_ACKNOWLEDGE = 37
+        /** characters whose GSM 03.38 code equals ASCII, so packing needs no lookup table */
+        private val GSM7_SAFE: Set<Char> = (('A'..'Z') + ('a'..'z') + ('0'..'9') + " \n\r!\"#%&'()*+,-./:;<=>?".toList()).toSet()
         private const val CALL_ACTIVE = 0
         private const val CALL_INCOMING = 4
         private const val RIL_REQUEST_LAST_CALL_FAIL_CAUSE = 18

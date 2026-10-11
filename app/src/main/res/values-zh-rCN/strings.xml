@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">无法加载目录：%1$s</string>
     <string name="catalog_warnings">以下行的目录数据无效或不完整：%1$s</string>
     <string name="browser_unavailable">没有可用于打开此链接的浏览器。</string>
-    <string name="experimental_activated">已启用实验性功能！</string>
-    <string name="experimental_locked">实验性摄像头设置已锁定。连续点按 AEmulator Plus 标题 42 次即可解锁。</string>
     <string name="m_minimize">最小化</string>
     <string name="open_vm">打开</string>
     <string name="vm_restarting">正在重启虚拟机…</string>

@@ -138,12 +138,16 @@ class TreeFixer(
         vendorAudioPolicy()
         audioPolicy()
         audioOpenSlot()
+        seedSamsungCsc()
         qemuAudioPolicy()
         qtaguid()
         vendorChecks()
+        flattenedLinks()
         shellLink()
         pldHints()
         berlinOsalGuard()
+        hdmiRxGuard()
+        appProcessLink()
         scriptShebangs()
         samsungEfs()
         selinuxOff()
@@ -162,7 +166,13 @@ class TreeFixer(
      * Скрипты am/pm/input/monkey… в старых прошивках начинаются с «# Script…» без #!. Ядро на такой
      * execve отвечает ENOEXEC и mksh запускает файл сам, а qemu вместо этого падает «Exec format error».
      */
+    /** Only app_process32 shipped: add the app_process link the pm/am/input scripts and our helper services expect. */
+    private fun appProcessLink() {
+        if (AppProcess.ensureLink(root)) log("app_process: only app_process32 present, linked system/bin/app_process -> app_process32")
+    }
+
     private fun scriptShebangs() {
+        val ap = AppProcess.path(root)
         var fixed = 0
         val failed = ArrayList<String>()
         // the commands (system/bin, system/xbin) plus the *.sh helpers the framework runs itself (WifiHW runs
@@ -180,7 +190,7 @@ class TreeFixer(
                 if (head[0] == '#'.code.toByte() && head[1] == '!'.code.toByte()) {
                     runCatching {
                         val t = f.readText(Charsets.ISO_8859_1)
-                        val u = t.replace(Regex("(?m)^(\\s*)exec app_process\\b"), "$1exec /system/bin/app_process")
+                        val u = AppProcess.fixExec(t, ap)
                         if (u != t) { f.writeText(u, Charsets.ISO_8859_1); fixed++ }
                     }
                     continue
@@ -189,8 +199,7 @@ class TreeFixer(
                 // a read-only or odd-owner file made writeBytes() fail silently and left "pm: Exec format error" behind:
                 // retry through a temp file that replaces the original, keeping the mode bits
                 val ok = runCatching {
-                    val body = ("#!/system/bin/sh\n" + String(f.readBytes(), Charsets.ISO_8859_1)
-                        .replace(Regex("(?m)^(\\s*)exec app_process\\b"), "$1exec /system/bin/app_process")).toByteArray(Charsets.ISO_8859_1)
+                    val body = ("#!/system/bin/sh\n" + AppProcess.fixExec(String(f.readBytes(), Charsets.ISO_8859_1), ap)).toByteArray(Charsets.ISO_8859_1)
                     val exec = f.canExecute()
                     try { f.writeBytes(body) } catch (_: Exception) {
                         f.setWritable(true, true)
@@ -263,6 +272,25 @@ class TreeFixer(
             dst.setExecutable(true, false)
             log("audio: Samsung audio policy (${vendor.name.substringAfterLast('#')}) installed as the default policy")
         }.onFailure { log("audio: Samsung audio policy install failed: ${it.message}") }
+    }
+
+    /**
+     * Samsung firmware reads /system/csc/customer.xml (carrier customisation), normally supplied by the CSC partition,
+     * which the importer skips. Without it Messaging (com.android.mms.csc.CscParser.search, "File didn't exist") dies with
+     * a NullPointerException in Application.onCreate, instantly on every launch. An empty but well-formed file is enough
+     * for the parser to find "no carrier overrides".
+     */
+    private fun seedSamsungCsc() {
+        runCatching {
+            val samsung = img.skin.contains("TouchWiz", true) || img.skin.contains("Samsung", true)
+            val f = File(root, "system/csc/customer.xml")
+            if (!samsung || f.exists() || !File(root, "system/app").isDirectory) return
+            f.parentFile?.mkdirs()
+            f.writeText("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<CustomerData>\n  <GeneralInfo>\n  </GeneralInfo>\n  <Settings>\n  </Settings>\n</CustomerData>\n")
+            f.setReadable(true, false)
+            f.parentFile?.setReadable(true, false); f.parentFile?.setExecutable(true, false)
+            log("csc: wrote an empty /system/csc/customer.xml (Samsung Messaging needs the file)")
+        }.onFailure { log("csc: cannot write customer.xml: ${it.message}") }
     }
 
     /**
@@ -363,12 +391,18 @@ class TreeFixer(
             if (!lib.renameTo(orig)) return
         }
         val asset = "engines/kk/audio.primary.mtk.so"
-        val size = runCatching { ctx.assets.openFd(asset).use { it.length } }.getOrDefault(-1L)
-        if (lib.isFile && lib.length() == size && sameContent(asset, lib)) return
         runCatching {
-            ctx.assets.open(asset).use { i -> lib.outputStream().use { o -> i.copyTo(o) } }
+            // AudioFlinger asks libhardware for module class "libaudio"/"primary" here, and libhardware rejects a module
+            // whose id differs ("load: id=libaudio != hmi->id=audio"). The same asset serves the AOSP-style loader
+            // (hw/audio.primary.default.so, id "audio"), so only this copy gets the id changed.
+            val raw = ctx.assets.open(asset).use { it.readBytes() }
+            val hal = HalModuleId.retarget(raw, MTK_HAL_MODULE_ID)
+            if (hal == null) log("audio: cannot set the HAL module id to $MTK_HAL_MODULE_ID, AudioFlinger will refuse it")
+            val bytes = hal ?: raw
+            if (lib.isFile && lib.length() == bytes.size.toLong() && lib.readBytes().contentEquals(bytes)) return
+            lib.outputStream().use { it.write(bytes) }
             lib.setReadable(true, false)
-            log("audio: MediaTek HAL replaced with the emulator HAL")
+            log("audio: MediaTek HAL replaced with the emulator HAL (module id $MTK_HAL_MODULE_ID)")
         }.onFailure { log("audio: MediaTek HAL swap failed: ${it.message}") }
     }
 
@@ -494,6 +528,7 @@ class TreeFixer(
                 "netprobe" to "system/bin/netprobe",
                 "aemu-stubs.jar" to "system/framework/aemu-stubs.jar",
                 "aemu-bt.jar" to "system/framework/aemu-bt.jar",
+                "aemu-wifi.jar" to "system/framework/aemu-wifi.jar",
                 "aemu-sensorhub.jar" to "system/framework/aemu-sensorhub.jar",
             )
             Engine.GB -> listOf(
@@ -700,6 +735,19 @@ class TreeFixer(
 
     /** Пустые таблицы xt_qtaguid, на которые гостевая прослойка подменяет /proc/net/xt_qtaguid/… */
     /**
+     * Images imported from a zip that lost its symlinks have system/bin/sh as a 4-byte text file ("mksh"), so
+     * `adb shell` ends in "Error while loading .../system/bin/sh: Exec format error", and so does every toolbox applet
+     * (ls, cat, ...) that is a 7-byte file saying "toolbox". Such images are repaired here, once per image
+     * (see [FlattenedLinks]); new imports are repaired by Importer.finishTree.
+     */
+    private fun flattenedLinks() = runCatching {
+        val stamp = File(root, ".aemu-flatlinks")
+        if (stamp.isFile) return@runCatching
+        FlattenedLinks.repair(root, log)
+        stamp.writeText("1\n")
+    }.onFailure { log("symlinks: flattened link repair failed: ${it.message}") }
+
+    /**
      * `adb shell` and every `sh -c` start /system/bin/sh. qemu stats the host path of the executable, so the link must
      * be relative and resolve inside the tree: a missing sh, a dangling link, or an absolute link (it would resolve
      * against the phone's own /system) ends in "unable to stat file for the executable" and an abort in the guest
@@ -718,7 +766,10 @@ class TreeFixer(
             val t = java.nio.file.Files.readSymbolicLink(path).toString()
             if (!t.startsWith("/") && inTree(File(bin, "sh"))) return@runCatching
         } else if (java.nio.file.Files.exists(path, nofollow)) {
-            return@runCatching // a real file (or something unusual): not ours to replace
+            // a real file is not ours to replace, unless it is a few bytes of plain text (a flattened link, "mksh")
+            val head = runCatching { path.toFile().takeIf { it.length() <= FlattenedLinks.MAX_LEN }?.readBytes() }.getOrNull()
+            if (head == null || FlattenedLinks.targetOf(head) == null) return@runCatching
+            path.toFile().delete()
         }
         val target = listOf("mksh", "ash", "toybox", "busybox", "../xbin/busybox").firstOrNull { inTree(File(bin, it)) }
         if (target == null) { log("sh: system/bin/sh is missing and there is no mksh/ash/toybox/busybox to link it to"); return@runCatching }
@@ -780,6 +831,12 @@ class TreeFixer(
     private val HDMIRX_NOOPS = setOf(
         "GetBoardVersion", "kg2h_gpio_exit", "kg2h_gpio_set", "kg2h_gpio_enable_irq", "kg2h_gpio_disable_irq",
     )
+
+    /**
+     * Entry points of the Avc275x HDMI receiver driver (libkg2h.so): they bring the chip up over i2c/gpio and wait for
+     * it to report ready, which it never does here. Skipped (report success) by [hdmiRxGuard].
+     */
+    private val HDMIRX_INIT = setOf("KG2H_InitDevice", "AvcInitKG2h", "AvcInitHdmiRx", "Avc275xI2CInit")
 
     private fun berlinOsalGuard() = runCatching {
         if (!GuestPreload.isGlibcFirmware(root)) return@runCatching
@@ -862,6 +919,55 @@ class TreeFixer(
         val marker = File(tmp, ".PE_AV_Init.done")
         if (!marker.exists() && marker.createNewFile()) log("Berlin: /tmp/.PE_AV_Init.done created (in /$rel)")
     }.onFailure { log("Berlin: vendor lib patch failed: ${it.message}") }
+
+    /**
+     * Google TV 3.2 (Marvell Berlin, Netgear GTV100) with a bionic userland: mediaserver prints "HDMI RX INIT" and then
+     * spins forever in the Avc275x HDMI receiver driver ("master_id = 0,,twsi_fp[master_id] = (null)",
+     * "Avc275x_i2csend -- write FAIL!!" / "Avc275x_i2crecv -- i2c read FAIL!!", ~700 MB of it in 15 seconds). The chip sits on
+     * /dev/twsi0 and /dev/gpio, which do not exist here, so the receiver never answers, MediaPlayerService and
+     * AudioPolicyService are never created, "media.audio_policy" is never registered and every client sits in
+     * "ServiceManager: Waiting for service media.audio_policy...". berlinOsalGuard() only runs for the glibc build, so
+     * this one was never touched. The receiver is not needed in the guest: its i2c transfers and GPIO calls report
+     * success at once, so the init finishes instead of retrying. Libraries (and mediaserver itself, in case the driver is
+     * linked statically) that mention the driver are patched once per image; the originals are kept in .aemu-parked.
+     * The functions found are logged, so a build whose driver is stripped shows up in aemu.log instead of silently hanging.
+     */
+    private fun hdmiRxGuard() = runCatching {
+        val stamp = File(root, ".aemu-hdmirx")
+        // v2: the i2c stand-ins alone only silenced the retry loop (nothing printed, mediaserver still never got past
+        // the receiver init), so the driver's init entry points are skipped as well; v1 images are redone
+        if (stamp.isFile && runCatching { stamp.readText().trim() }.getOrNull() == "2") return@runCatching
+        val markers = listOf("Avc275x", "kg2h_gpio", "twsi_fp").map { it.toByteArray(Charsets.ISO_8859_1) }
+        fun mentions(d: ByteArray) = markers.any { m -> indexOf(d, m) >= 0 }
+        val wanted = { n: String -> n in HDMIRX_NOOPS || n in HDMIRX_INIT || n.startsWith("Avc275x_i2c") }
+        val candidates = ArrayList<File>()
+        for (dir in listOf("system/lib", "system/vendor/lib", "vendor/lib", "lib"))
+            File(root, dir).listFiles()?.filterTo(candidates) { it.isFile && !isLink(it) && it.name.endsWith(".so") }
+        for (n in listOf("mediaserver", "av_settings")) File(root, "system/bin/$n").takeIf { it.isFile && !isLink(it) }?.let { candidates += it }
+        var patched = 0
+        var seen = 0
+        for (lib in candidates) {
+            if (lib.length() < 4096 || lib.length() > 30L shl 20) continue
+            val d = runCatching { lib.readBytes() }.getOrNull() ?: continue
+            if (d[0] != 0x7f.toByte() || d[1] != 'E'.code.toByte() || !mentions(d)) continue
+            seen++
+            val rel = lib.relativeTo(root).path
+            val found = ElfPatch.symbolsMatching(d, true, wanted)?.keys.orEmpty()
+            if (found.isEmpty()) {
+                val like = ElfPatch.symbolsMatching(d, true) { Regex("(?i)avc275x|kg2h|hdmi_?rx").containsMatchIn(it) }?.keys.orEmpty()
+                log("HDMI RX: $rel mentions the receiver driver but exports none of its i2c/gpio functions" +
+                    if (like.isEmpty()) " (stripped)" else "; candidates: ${like.take(80).joinToString()}")
+                continue
+            }
+            val keep = File(root, "system/.aemu-parked/" + rel.replace("/", "#"))
+            if (!keep.exists()) { keep.parentFile?.mkdirs(); lib.copyTo(keep) }
+            val n = ElfPatch.returnZeroMatching(lib, true, wanted)
+            patched += n
+            log("HDMI RX: $rel patched ($n of ${found.size} func.: ${found.joinToString()})")
+        }
+        if (seen > 0 && patched == 0) log("HDMI RX: driver functions already patched or not found in $seen file(s)")
+        stamp.writeText("2\n")
+    }.onFailure { log("HDMI RX: guard failed: ${it.message}") }
 
     /**
      * KitKat (Tegra) SurfaceFlinger dereferences the NULL HAL device (hwcomposer is parked) right after
@@ -1077,6 +1183,7 @@ class TreeFixer(
         procNetNodes()
         javaIfInet6Redirect()
         settingsCpuinfoRedirect()
+        launcherProximityGuard()
         tungstenLedNodes()
         tungstenLedInitPatch()
         tungstenLedCountPatch()
@@ -1108,7 +1215,13 @@ class TreeFixer(
         val nodes = linkedMapOf(
             "proc/net/if_inet6" to "00000000000000000000000000000001 01 80 10 80       lo\n",
             "proc/version" to VmSettings.procVersion(img.settings.kernel),
+            // Chinese "xhl" firmware: SpenService.checkVersion() writes to /proc/versioncheck, and Launcher.onCreate()
+            // returns before setupViews() when that check fails, so onResume then dies on a null mWorkspace
+            // (NullPointerException at Launcher.onResume, relaunched forever as the only HOME app)
+            "proc/versioncheck" to "",
         )
+        // nodes the guest writes to as well as reads
+        val writable = setOf("proc/versioncheck")
         // directories the guest (a faked, non-owner uid) must be able to traverse: 0755
         for (rel in listOf("proc", "proc/net")) runCatching {
             val d = File(root, rel)
@@ -1120,11 +1233,12 @@ class TreeFixer(
             val f = File(root, rel)
             if (isLink(f) || f.isDirectory) wipe(f)
             f.parentFile?.mkdirs()
-            if (!f.isFile || f.readText() != v) f.writeText(v)
-            Os.chmod(f.path, 0b110_100_100) // 0644: readable by any guest uid
+            if (!f.isFile || (rel !in writable && f.readText() != v)) f.writeText(v)
+            // 0644: readable by any guest uid (0666 for the nodes the guest writes)
+            Os.chmod(f.path, if (rel in writable) 0b110_110_110 else 0b110_100_100)
             val back = f.readText()
             val mode = Os.stat(f.path).st_mode and 0xfff
-            if (back != v) error("read-back mismatch (${back.length} bytes)")
+            if (rel !in writable && back != v) error("read-back mismatch (${back.length} bytes)")
             log("procfs: /$rel served from the tree (${Integer.toOctalString(mode)}, ${f.length()} bytes)")
         }.onFailure { log("procfs: cannot create /$rel: ${it.message}") }
     }
@@ -1199,6 +1313,35 @@ class TreeFixer(
             }
         }
     }.onFailure { log("settings: cpuinfo redirect failed: ${it.message}") }
+
+    /**
+     * "xhl" firmware (NDLauncher): Launcher.onCreate() ends with getSensorList(TYPE_PROXIMITY).get(0), and the guest's
+     * sensor HAL has no proximity sensor, so the list is empty and the launcher dies with IndexOutOfBoundsException
+     * (Launcher.java:765) on every start; the system relaunches it forever as the only HOME app. [LauncherProximityPatch]
+     * makes that lookup tolerate an empty list (onResume/onPause already skip a null sensor).
+     * Odex when the firmware has one, otherwise the dalvik-cache copy (created by the first boot). Launcher apps whose
+     * dex lacks the lookup are not touched, and nothing is logged for them.
+     */
+    private fun launcherProximityGuard() = runCatching {
+        if (img.api > 20) return@runCatching
+        val targets = ArrayList<File>()
+        for (dir in listOf("system/app", "system/priv-app"))
+            File(root, dir).listFiles()?.filterTo(targets) { it.isFile && it.name.endsWith(".odex") && it.name.contains("Launcher", true) }
+        File(root, "data/dalvik-cache").listFiles()?.filterTo(targets) {
+            it.isFile && it.name.contains("Launcher", true) && it.name.endsWith("@classes.dex")
+        }
+        for (f in targets) {
+            val d = f.readBytes()
+            when (LauncherProximityPatch.apply(d)) {
+                LauncherProximityPatch.PATCHED -> {
+                    f.setWritable(true, true); f.writeBytes(d)
+                    log("launcher: ${f.name} no longer fails when the guest has no proximity sensor")
+                }
+                LauncherProximityPatch.UNEXPECTED -> log("launcher: ${f.name} looks up the proximity sensor, but not in the code this patch knows, left as is")
+                else -> {}
+            }
+        }
+    }.onFailure { log("launcher: proximity guard failed: ${it.message}") }
 
     /**
      * Nexus Q (Tungsten): LEDService's LEDController.nativeInit() opens the LED ring driver and throws
@@ -1284,7 +1427,7 @@ class TreeFixer(
             val off = (ElfPatch.symbols(f, setOf(name))?.get(name) ?: continue) and 0xffffffffffL
             fun hw(r: java.io.RandomAccessFile, at: Long): Int { r.seek(at); val a = r.read(); val b = r.read(); return a or (b shl 8) }
             java.io.RandomAccessFile(f, "rw").use { r ->
-                if (hw(r, off + 16) == 0x2320) return@use // already patched
+                if (hw(r, off + 12) == 0x2320) return@use // already patched
                 // push {r4,lr}; mov r2,r1; cbnz r1; mvn r0,#21; b; ldr r0,[r0]; ldr r1,[pc,#8]; blx ioctl; pop
                 if (hw(r, off) != 0xb510 || hw(r, off + 2) != 0x460a || hw(r, off + 4) != 0xb911 ||
                     hw(r, off + 12) != 0x6800 || hw(r, off + 14) != 0x4902 || hw(r, off + 16) != 0xf7ff) {
@@ -1536,9 +1679,17 @@ class TreeFixer(
         }.onFailure { log("setup: Sony flow migration failed: ${it.message}") }
     }
 
+    /**
+     * settings.db of the guest: /data/data/... on stock layouts, /dbdata/databases/... on Samsung 2.x/3.x (the
+     * framework hardcodes /dbdata there). Null until SettingsProvider has created it (after the first boot).
+     */
+    private fun settingsDb(): File? = listOf(
+        "data/data/com.android.providers.settings/databases/settings.db",
+        "dbdata/databases/com.android.providers.settings/settings.db",
+    ).map { File(root, it) }.firstOrNull { it.isFile }
+
     fun noScreenSleep() {
-        val db = File(root, "data/data/com.android.providers.settings/databases/settings.db")
-        if (!db.isFile) return
+        val db = settingsDb() ?: return
         runCatching {
             SQLiteDatabase.openDatabase(db.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { d ->
                 fun put(table: String, name: String, value: String) {
@@ -1557,6 +1708,10 @@ class TreeFixer(
                 put(if (img.api >= 17) "global" else "secure", "install_non_market_apps", "1")
                 put("secure", "install_non_market_apps", "1")
                 if (img.api >= 17) put("global", "verifier_verify_adb_installs", "0")
+                // Samsung 2.x/3.x DeviceStorageMonitorService judges /dbdata by the host's real free space (statfs is not
+                // faked there, unlike /data): a phone that is >90% full makes the guest "database low on memory", and the
+                // stock messaging stack then stops storing incoming SMS. 1% instead of the default 10%.
+                if (File(root, "dbdata").isDirectory) put("secure", "sys_storage_threshold_percentage", "1")
                 // Preserve the older-engine behavior; the explicit live-provider option starts at API 16.
                 if (img.api < 16 && !hasSonySetupFlow()) {
                     put("secure", "device_provisioned", "1")
@@ -1846,6 +2001,9 @@ class TreeFixer(
     private fun wipe(f: File) = ImageStore.wipe(f)
 
     companion object {
+        /** hw_module_t.id that MediaTek's AudioFlinger requests for libaudio.primary.default.so. */
+        private const val MTK_HAL_MODULE_ID = "libaudio"
+
         /** Прошивка MediaTek, где AudioFlinger связан с собственной звуковой библиотекой MTK (/dev/eac). */
         fun isMtkAudio(root: File): Boolean {
             if (File(root, "system/lib/libaudio.mtk.so").isFile) return true   // already swapped for our HAL

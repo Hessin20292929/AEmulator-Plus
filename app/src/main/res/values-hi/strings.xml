@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">कैटलॉग लोड नहीं हो सका: %1$s</string>
     <string name="catalog_warnings">इन पंक्तियों में कैटलॉग डेटा अमान्य या अधूरा है: %1$s</string>
     <string name="browser_unavailable">यह लिंक खोलने के लिए कोई ब्राउज़र उपलब्ध नहीं है।</string>
-    <string name="experimental_activated">प्रायोगिक सुविधाएँ सक्रिय हो गईं!</string>
-    <string name="experimental_locked">प्रायोगिक कैमरा सेटिंग लॉक हैं। इन्हें अनलॉक करने के लिए AEmulator Plus शीर्षक पर 42 बार टैप करें।</string>
     <string name="m_minimize">छोटा करें</string>
     <string name="open_vm">खोलें</string>
     <string name="vm_restarting">वर्चुअल मशीन रीस्टार्ट हो रही है…</string>

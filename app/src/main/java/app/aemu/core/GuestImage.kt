@@ -60,10 +60,20 @@ data class VmSettings(
     val kernel: String = "",
     /** gsm.version.baseband and the modem's baseband answer; blank = default */
     val baseband: String = "",
+    /** radio technology the fake modem reports (see [NetworkType]); default 2G (EDGE) */
+    val networkType: Int = NetworkType.DEFAULT,
     /** extra qemu options; KEY=VALUE tokens are passed as environment variables */
     val qemuArgs: String = "",
+    /** Guest services whose qemu system calls are traced into the service log, comma separated ("mediaserver,zygote"). */
+    val straceServices: String = "",
     /** ro.hardware given to the guest at launch; blank = whatever the firmware defines */
     val hardware: String = "",
+    /** Emulated Wi-Fi: the guest sees a connected Wi-Fi network [wifiSsid] that carries the host's internet; applies at the next full VM boot. */
+    val wifi: Boolean = false,
+    /** Name of the emulated Wi-Fi network. */
+    val wifiSsid: String = WifiEmu.DEFAULT_SSID,
+    /** WPA2 passphrase of the emulated network; blank = open network. */
+    val wifiPassword: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("width", width).put("height", height).put("density", density)
@@ -82,8 +92,9 @@ data class VmSettings(
         .put("motionSensors", motionSensors).put("gyroLock", gyroLock).put("hostResolution", hostResolution)
         .put("skipSetupWizard", skipSetupWizard)
         .put("disableGoogleApps", disableGoogleApps)
-        .put("ramMb", ramMb).put("radio", radio).put("imei", imei).put("serial", serial).put("kernel", kernel).put("baseband", baseband).put("qemuArgs", qemuArgs)
+        .put("ramMb", ramMb).put("radio", radio).put("imei", imei).put("serial", serial).put("kernel", kernel).put("baseband", baseband).put("networkType", networkType).put("qemuArgs", qemuArgs).put("straceServices", straceServices)
         .put("hardware", hardware)
+        .put("wifi", wifi).put("wifiSsid", wifiSsid).put("wifiPassword", wifiPassword)
 
     companion object {
         /** Luhn-valid sample IMEI from the standard; the guest has no real modem */
@@ -124,6 +135,11 @@ data class VmSettings(
             return if (t.startsWith("Linux version")) t + "\n"
             else "Linux version ${kernelRelease(t).ifEmpty { DEFAULT_KERNEL }} (aemu@aemu) (gcc version 4.6) #1 SMP PREEMPT Thu Jan 1 00:00:00 UTC 2026\n"
         }
+
+        /** The service names of a "mediaserver, zygote" list (commas, blanks or both); only characters valid in a file name are kept. */
+        fun straceNames(v: String): Set<String> =
+            v.split(',', ' ', '\t', ';', '\n').map { n -> n.filter { it.isLetterOrDigit() && it.code < 128 || it == '_' || it == '-' || it == '.' } }
+                .filter { it.isNotEmpty() && it != "." && it != ".." }.toCollection(LinkedHashSet())
 
         fun cleanSerial(v: String): String = v.filter { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' }.take(SERIAL_MAX)
 
@@ -178,8 +194,13 @@ data class VmSettings(
                 serial = cleanSerial(o.optString("serial", "")),
                 kernel = cleanKernel(o.optString("kernel", "")),
                 baseband = cleanBaseband(o.optString("baseband", "")),
+                networkType = NetworkType.sanitize(o.optInt("networkType", d.networkType)),
                 qemuArgs = o.optString("qemuArgs", ""),
+                straceServices = o.optString("straceServices", ""),
                 hardware = cleanHardware(o.optString("hardware", "")),
+                wifi = o.optBoolean("wifi", d.wifi),
+                wifiSsid = WifiEmu.cleanSsid(o.optString("wifiSsid", d.wifiSsid)).ifEmpty { WifiEmu.DEFAULT_SSID },
+                wifiPassword = WifiEmu.cleanPassword(o.optString("wifiPassword", "")),
             )
         }
     }

@@ -134,6 +134,7 @@ import app.aemu.core.BluetoothPermissions
 import app.aemu.core.Engine
 import app.aemu.core.GuestLog
 import app.aemu.core.GuestVm
+import app.aemu.core.NetworkType
 import app.aemu.core.ImageStore
 import app.aemu.core.InputService
 import kotlinx.coroutines.delay
@@ -559,10 +560,15 @@ class VmActivity : ComponentActivity() {
     }
 
     private fun sendSms(from: String, body: String) {
-        // no live modem: the message is written straight into the SMS provider inbox
-        val cmd = "content insert --uri content://sms/inbox --bind address:s:${q(from)} --bind body:s:${q(body)} " +
-            "--bind read:i:0 --bind date:l:${System.currentTimeMillis()}"
-        guestAsync(cmd) { out -> toast(if (out.isBlank()) getString(R.string.m_sms_sent) else out.trim().take(200)) }
+        thread {
+            // preferred: through the fake modem, the guest's telephony receives it like a real SMS (no shell, no `content` tool)
+            if (vm.ril.deliverSms(from.trim(), body)) { toast(getString(R.string.m_sms_sent)); return@thread }
+            // telephony not up (or in "radio unavailable" mode): write into the SMS provider inbox instead
+            val cmd = "content insert --uri content://sms/inbox --bind address:s:${q(from)} --bind body:s:${q(body)} " +
+                "--bind read:i:0 --bind date:l:${System.currentTimeMillis()}"
+            val out = runCatching { vm.guestShell(cmd, 60_000) }.getOrElse { it.toString() }
+            toast(if (out.isBlank()) getString(R.string.m_sms_sent) else out.trim().take(200))
+        }
     }
 
     @Composable
@@ -596,6 +602,22 @@ class VmActivity : ComponentActivity() {
                             guestAsync("settings put global airplane_mode_on ${if (v) 1 else 0}; " +
                                 "am broadcast -a android.intent.action.AIRPLANE_MODE --ez state $v")
                         })
+                    }
+                    if (vm.img.settings.radio) {
+                        var net by remember { mutableStateOf(vm.ril.networkType) }
+                        var open by remember { mutableStateOf(false) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.m_network), Modifier.weight(1f))
+                            Box {
+                                TextButton(onClick = { open = true }) { Text(NetworkType.label(net)) }
+                                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                                    NetworkType.available(vm.img.api).forEach { e ->
+                                        DropdownMenuItem(text = { Text(e.label) },
+                                            onClick = { open = false; net = e.tech; thread { vm.ril.setNetworkType(e.tech) } })
+                                    }
+                                }
+                            }
+                        }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.m_stay_awake), Modifier.weight(1f))

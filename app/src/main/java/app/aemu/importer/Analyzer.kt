@@ -32,7 +32,7 @@ class Analyzer(private val ctx: Context, private val paths: VmPaths, private val
         val release = all["ro.build.version.release"] ?: "?"
         val brand = (all["ro.product.brand"] ?: all["ro.product.manufacturer"] ?: "").replaceFirstChar { it.uppercase() }
         val model = all["ro.product.model"] ?: all["ro.product.device"] ?: "Android"
-        val skin = skin(all)
+        val skin = formFactorSkin(all, api) ?: skin(all)
         val abi = all["ro.product.cpu.abi"] ?: "armeabi-v7a"
 
         // init.rc и его import’ы лежат в корне рамдиска
@@ -114,6 +114,26 @@ class Analyzer(private val ctx: Context, private val paths: VmPaths, private val
 
     companion object {
         const val VERSION = 15
+
+        /**
+         * Form-factor tag from ro.build.characteristics: if the line contains "tv" it is Google TV below API 18 and
+         * Android TV from API 18 on; if it contains "watch" it is Wear. A line with both is AOSP. A fingerprint containing
+         * "oogle/glass" (any case) is Glass OS and wins over the above. Null for
+         * phones/tablets, which fall through to [skin].
+         */
+        internal fun formFactorSkin(p: Map<String, String>, api: Int): String? {
+            // "oogle/glass" skips the first letter: the fingerprint may say Google or google
+            if (p["ro.build.fingerprint"]?.contains("oogle/glass", ignoreCase = true) == true) return "Glass OS"
+            val line = (p["ro.build.characteristics"] ?: return null).lowercase()
+            val tv = "tv" in line
+            val watch = "watch" in line
+            return when {
+                tv && watch -> "AOSP"
+                watch -> "Wear"
+                tv -> if (api < 18) "Google TV" else "Android TV"
+                else -> null
+            }
+        }
 
         private val LMK_DEFAULTS = listOf(
             "ro.FOREGROUND_APP_ADJ" to "0", "ro.VISIBLE_APP_ADJ" to "1", "ro.PERCEPTIBLE_APP_ADJ" to "2",

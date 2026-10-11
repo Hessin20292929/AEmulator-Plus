@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">Nie udało się wczytać katalogu: %1$s</string>
     <string name="catalog_warnings">Nieprawidłowe lub niekompletne dane katalogu w wierszach: %1$s</string>
     <string name="browser_unavailable">Brak przeglądarki, która mogłaby otworzyć ten link.</string>
-    <string name="experimental_activated">Funkcje eksperymentalne aktywowane!</string>
-    <string name="experimental_locked">Eksperymentalne ustawienia aparatu są zablokowane. Dotknij tytułu AEmulator Plus 42 razy, aby je odblokować.</string>
     <string name="m_minimize">Minimalizuj</string>
     <string name="open_vm">Otwórz</string>
     <string name="vm_restarting">Ponowne uruchamianie maszyny wirtualnej…</string>

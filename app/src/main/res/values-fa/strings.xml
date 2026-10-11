@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">بارگذاری فهرست ممکن نشد: %1$s</string>
     <string name="catalog_warnings">داده‌های فهرست در این خطوط نامعتبر یا ناقص است: %1$s</string>
     <string name="browser_unavailable">مرورگری برای باز کردن این پیوند در دسترس نیست.</string>
-    <string name="experimental_activated">ویژگی‌های آزمایشی فعال شد!</string>
-    <string name="experimental_locked">تنظیمات آزمایشی دوربین قفل است. برای باز کردن قفل، 42 بار روی عنوان AEmulator Plus بزنید.</string>
     <string name="m_minimize">کوچک کردن</string>
     <string name="open_vm">باز کردن</string>
     <string name="vm_restarting">در حال راه‌اندازی مجدد ماشین مجازی…</string>

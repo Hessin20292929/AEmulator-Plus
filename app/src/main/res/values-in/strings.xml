@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">Tidak dapat memuat katalog: %1$s</string>
     <string name="catalog_warnings">Data katalog tidak valid atau tidak lengkap pada baris: %1$s</string>
     <string name="browser_unavailable">Tidak ada browser untuk membuka tautan ini.</string>
-    <string name="experimental_activated">Fitur eksperimental diaktifkan!</string>
-    <string name="experimental_locked">Pengaturan kamera eksperimental terkunci. Ketuk judul AEmulator Plus 42 kali untuk membukanya.</string>
     <string name="m_minimize">Ciutkan</string>
     <string name="open_vm">Buka</string>
     <string name="vm_restarting">Memulai ulang mesin virtual…</string>

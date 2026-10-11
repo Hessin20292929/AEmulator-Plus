@@ -22,7 +22,11 @@ object ElfPatch {
         runCatching { f.readBytes() }.getOrNull()?.let { symbolsIn(it, names, includeSymtab) }
 
     /** The same for the bytes of an ELF file. */
-    fun symbolsIn(d: ByteArray, names: Set<String>, includeSymtab: Boolean = false): Map<String, Long>? {
+    fun symbolsIn(d: ByteArray, names: Set<String>, includeSymtab: Boolean = false): Map<String, Long>? =
+        symbolsMatching(d, includeSymtab) { it in names }
+
+    /** Like [symbolsIn], for every function whose name satisfies [wanted] (a pattern instead of a fixed list). */
+    fun symbolsMatching(d: ByteArray, includeSymtab: Boolean = false, wanted: (String) -> Boolean): Map<String, Long>? {
         if (d.size < 52 || d[0] != 0x7f.toByte() || d[1] != 'E'.code.toByte() || d[4] != 1.toByte()) return null
         val b = ByteBuffer.wrap(d).order(ByteOrder.LITTLE_ENDIAN)
         if (b.getShort(18).toInt() != 40) return null // EM_ARM
@@ -45,7 +49,7 @@ object ElfPatch {
                     var e = strOff + nameOff
                     while (e < d.size && d[e] != 0.toByte()) e++
                     val name = String(d, strOff + nameOff, e - strOff - nameOff, Charsets.US_ASCII)
-                    if (name in names) {
+                    if (wanted(name)) {
                         // виртуальный адрес → смещение в файле по заголовкам программы
                         val va = value and 0xfffffffeL
                         for (p in 0 until phnum) {
@@ -229,8 +233,12 @@ object ElfPatch {
     }
 
     /** Сделать функции «return 0». Возвращает число изменённых (уже исправленные не считаются). */
-    fun returnZero(f: File, names: Set<String>, includeSymtab: Boolean = false): Int {
-        val syms = symbols(f, names, includeSymtab) ?: return 0
+    fun returnZero(f: File, names: Set<String>, includeSymtab: Boolean = false): Int =
+        returnZeroMatching(f, includeSymtab) { it in names }
+
+    /** [returnZero] for every function whose name satisfies [wanted]. */
+    fun returnZeroMatching(f: File, includeSymtab: Boolean = false, wanted: (String) -> Boolean): Int {
+        val syms = runCatching { f.readBytes() }.getOrNull()?.let { symbolsMatching(it, includeSymtab, wanted) } ?: return 0
         var n = 0
         RandomAccessFile(f, "rw").use { raf ->
             for ((_, v) in syms) {

@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">تعذّر تحميل الكتالوج: %1$s</string>
     <string name="catalog_warnings">بيانات كتالوج غير صالحة أو ناقصة في الأسطر: %1$s</string>
     <string name="browser_unavailable">لا يوجد متصفح متاح لفتح هذا الرابط.</string>
-    <string name="experimental_activated">تم تفعيل الميزات التجريبية!</string>
-    <string name="experimental_locked">إعدادات الكاميرا التجريبية مقفلة. اضغط على عنوان AEmulator Plus ‏42 مرة لفتحها.</string>
     <string name="m_minimize">تصغير</string>
     <string name="open_vm">فتح</string>
     <string name="vm_restarting">جارٍ إعادة تشغيل الجهاز الافتراضي…</string>

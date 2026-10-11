@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">Impossibile caricare il catalogo: %1$s</string>
     <string name="catalog_warnings">Dati del catalogo non validi o incompleti alle righe: %1$s</string>
     <string name="browser_unavailable">Nessun browser disponibile per aprire questo link.</string>
-    <string name="experimental_activated">Funzioni sperimentali attivate!</string>
-    <string name="experimental_locked">Le impostazioni sperimentali della fotocamera sono bloccate. Tocca 42 volte il titolo AEmulator Plus per sbloccarle.</string>
     <string name="m_minimize">Riduci a icona</string>
     <string name="open_vm">Apri</string>
     <string name="vm_restarting">Riavvio della macchina virtuale…</string>

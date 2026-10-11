@@ -241,8 +241,6 @@
     <string name="catalog_load_failed">Не вдалося завантажити каталог: %1$s</string>
     <string name="catalog_warnings">Недійсні або неповні дані каталогу в рядках: %1$s</string>
     <string name="browser_unavailable">Немає браузера, щоб відкрити це посилання.</string>
-    <string name="experimental_activated">Експериментальні функції активовано!</string>
-    <string name="experimental_locked">Експериментальні налаштування камери заблоковано. Торкніться заголовка AEmulator Plus 42 рази, щоб розблокувати їх.</string>
     <string name="m_minimize">Згорнути</string>
     <string name="open_vm">Відкрити</string>
     <string name="vm_restarting">Перезапуск віртуальної машини…</string>

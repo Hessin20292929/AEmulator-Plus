@@ -371,6 +371,29 @@ internal object BlockOta {
 
     // ------------------------------------------------------------------ the transfer list
 
+    /**
+     * The operands of a move / bsdiff / imgdiff command, whatever the transfer list version. Version 1 writes
+     * `<src ranges> <tgt ranges>` (the number of source blocks is the size of the range set), version 2 and later
+     * write `<tgt ranges> <src block count> <src ranges …>`; patch commands carry `<offset> <length>` first, and
+     * from version 3 the source and target hashes after that.
+     */
+    private class Operands(val tgt: String, val srcBlocks: Long, val spec: List<String>, val srcHash: String?, val tgtHash: String?)
+
+    private fun operands(c: List<String>, version: Int, patch: Boolean): Operands {
+        val base = if (patch) 3 else 1
+        if (version == 1) {
+            val src = c[base]
+            return Operands(c[base + 1], count(ranges(src)), listOf(src), null, null)
+        }
+        val v3 = version >= 3
+        val hashes = if (v3) (if (patch) 2 else 1) else 0
+        val i = base + hashes
+        val srcBlocks = c[i + 1].toLongOrNull() ?: throw OtaException("bad ${c[0]} command in the transfer list")
+        val srcHash = if (!v3) null else if (patch) c[3] else c[1]
+        val tgtHash = if (v3 && patch) c[4] else null
+        return Operands(c[i], srcBlocks, c.drop(i + 2), srcHash, tgtHash)
+    }
+
     /** Copies the blocks [r] of [img] to the stash file [sf] and returns their SHA-1. */
     private fun writeStash(img: RandomAccessFile, r: LongArray, sf: File): String {
         val md = MessageDigest.getInstance("SHA-1")
@@ -418,16 +441,15 @@ internal object BlockOta {
                             "free" -> File(stashDir, "stash-" + c[1]).delete()
                             "move", "bsdiff", "imgdiff" -> {
                                 val patchCmd = c[0] != "move"
-                                val v3 = prog.version >= 3
-                                val idx = if (patchCmd) (if (v3) 5 else 3) else (if (v3) 2 else 1)
-                                val srcHash = if (!v3) null else if (patchCmd) c[3] else c[1]
-                                val srcBlocks = c[idx + 1].toLongOrNull() ?: throw OtaException("bad ${c[0]} command in the transfer list")
+                                val op = operands(c, prog.version, patchCmd)
+                                val srcHash = op.srcHash
+                                val srcBlocks = op.srcBlocks
                                 if (patchCmd) {
                                     val pOff = c[1].toLongOrNull() ?: throw OtaException("bad patch command in the transfer list")
                                     val pLen = c[2].toLongOrNull() ?: throw OtaException("bad patch command in the transfer list")
                                     if (pOff < 0 || pLen < 0 || pOff + pLen > patchLength) throw OtaException("the transfer list points outside the patch data")
                                 }
-                                val view = buildView(c.drop(idx + 2), srcBlocks, img, stashDir, opened)
+                                val view = buildView(op.spec, srcBlocks, img, stashDir, opened)
                                 if (srcHash != null && view.sha1() != srcHash.lowercase())
                                     throw OtaException("the source blocks of step ${n + 1} differ from what the OTA expects")
                             }
@@ -493,11 +515,11 @@ internal object BlockOta {
                                 }
                                 "free" -> File(stashDir, "stash-" + c[1]).delete()
                                 "move" -> {
-                                    val idx = if (prog.version >= 3) 2 else 1
-                                    val srcHash = if (prog.version >= 3) c[1] else null
-                                    val tgt = ranges(c[idx])
-                                    val srcBlocks = c[idx + 1].toLongOrNull() ?: throw OtaException("bad move command in the transfer list")
-                                    val view = buildView(c.drop(idx + 2), srcBlocks, img, stashDir, opened)
+                                    val op = operands(c, prog.version, false)
+                                    val srcHash = op.srcHash
+                                    val tgt = ranges(op.tgt)
+                                    val srcBlocks = op.srcBlocks
+                                    val view = buildView(op.spec, srcBlocks, img, stashDir, opened)
                                     if (srcHash != null && view.sha1() != srcHash.lowercase()) throw OtaException("source blocks differ from what the OTA expects")
                                     if (count(tgt) != srcBlocks) throw OtaException("bad move command in the transfer list")
                                     val out = RangeOut(img, tgt, total)
@@ -526,13 +548,13 @@ internal object BlockOta {
                                 "bsdiff", "imgdiff" -> {
                                     val pOff = c[1].toLongOrNull() ?: throw OtaException("bad patch command in the transfer list")
                                     val pLen = c[2].toLongOrNull() ?: throw OtaException("bad patch command in the transfer list")
-                                    val idx = if (prog.version >= 3) 5 else 3
-                                    val srcHash = if (prog.version >= 3) c[3] else null
-                                    val tgtHash = if (prog.version >= 3) c[4] else null
-                                    val tgt = ranges(c[idx])
-                                    val srcBlocks = c[idx + 1].toLongOrNull() ?: throw OtaException("bad patch command in the transfer list")
+                                    val op = operands(c, prog.version, true)
+                                    val srcHash = op.srcHash
+                                    val tgtHash = op.tgtHash
+                                    val tgt = ranges(op.tgt)
+                                    val srcBlocks = op.srcBlocks
                                     if (pOff < 0 || pLen < 0 || pOff + pLen > pf.length()) throw OtaException("the transfer list points outside the patch data")
-                                    val view = buildView(c.drop(idx + 2), srcBlocks, img, stashDir, opened)
+                                    val view = buildView(op.spec, srcBlocks, img, stashDir, opened)
                                     if (srcHash != null && view.sha1() != srcHash.lowercase()) throw OtaException("source blocks differ from what the OTA expects")
                                     val tgtBytes = count(tgt) * BLOCK
                                     val out = RangeOut(img, tgt, total)

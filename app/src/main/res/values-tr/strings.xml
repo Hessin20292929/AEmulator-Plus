@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">Katalog yüklenemedi: %1$s</string>
     <string name="catalog_warnings">Şu satırlarda geçersiz veya eksik katalog verisi var: %1$s</string>
     <string name="browser_unavailable">Bu bağlantıyı açacak bir tarayıcı yok.</string>
-    <string name="experimental_activated">Deneysel özellikler etkinleştirildi!</string>
-    <string name="experimental_locked">Deneysel kamera ayarları kilitli. Kilidi açmak için AEmulator Plus başlığına 42 kez dokunun.</string>
     <string name="m_minimize">Küçült</string>
     <string name="open_vm">Aç</string>
     <string name="vm_restarting">Sanal makine yeniden başlatılıyor…</string>

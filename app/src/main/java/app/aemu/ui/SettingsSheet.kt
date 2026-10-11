@@ -29,6 +29,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -47,7 +49,9 @@ import androidx.compose.ui.unit.dp
 import app.aemu.core.Engine
 import app.aemu.core.GuestImage
 import app.aemu.core.GyroLock
+import app.aemu.core.NetworkType
 import app.aemu.core.VmSettings
+import app.aemu.core.WifiEmu
 import app.aemu.core.VmStorageLease
 import app.aemu.core.VmDataReset
 import app.aemu.core.ImageStore
@@ -71,7 +75,6 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
     var resetConfirm by remember { mutableStateOf(false) }
     var resetting by remember { mutableStateOf(false) }
     var resetMessage by remember { mutableStateOf<String?>(null) }
-    val experimental = experimentalFeaturesEnabled()
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = { if (!resetting) onDismiss() }, sheetState = state) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).navigationBarsPadding()) {
@@ -141,11 +144,14 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
             if (img.api in 16..25) Toggle(stringResource(R.string.vs_skip_setup), stringResource(R.string.vs_skip_setup_sub), s.skipSetupWizard) { s = s.copy(skipSetupWizard = it) }
             if (img.api in 9..25) Toggle(stringResource(R.string.vs_disable_google), stringResource(R.string.vs_disable_google_sub), s.disableGoogleApps) { s = s.copy(disableGoogleApps = it) }
             if (img.api in 9..25) {
-                if (experimental || s.bluetooth) Toggle(stringResource(R.string.vs_bluetooth), stringResource(R.string.vs_bluetooth_sub), s.bluetooth) { s = s.copy(bluetooth = it) }
+                Toggle(stringResource(R.string.vs_bluetooth), stringResource(R.string.vs_bluetooth_sub), s.bluetooth) { s = s.copy(bluetooth = it) }
+            }
+            if (WifiEmu.supported(img.engine, img.api, false, false)) {
+                Toggle(stringResource(R.string.vs_wifi), stringResource(R.string.vs_wifi_sub), s.wifi) { s = s.copy(wifi = it) }
+                if (s.wifi) WifiFields(s) { s = it }
             }
             if (img.api in 14..25) {
-                if (experimental || s.camera) Toggle(stringResource(R.string.vs_camera), stringResource(R.string.vs_camera_sub), s.camera) { s = s.copy(camera = it) }
-                else Text(stringResource(R.string.experimental_locked), style = MaterialTheme.typography.bodySmall)
+                Toggle(stringResource(R.string.vs_camera), stringResource(R.string.vs_camera_sub), s.camera) { s = s.copy(camera = it) }
             }
 
             Spacer(Modifier.height(8.dp))
@@ -157,6 +163,7 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
                 TextButton(onClick = { s = s.copy(imei = VmSettings.randomImei()) }) { Text(stringResource(R.string.vs_random)) }
             }
+            if (s.radio) NetworkTypePicker(s.networkType, img.api) { s = s.copy(networkType = it) }
 
             Spacer(Modifier.height(8.dp))
             Text(stringResource(R.string.vs_device_id), style = MaterialTheme.typography.titleMedium)
@@ -180,6 +187,10 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
             Text(stringResource(R.string.vs_advanced), style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(value = s.qemuArgs, onValueChange = { s = s.copy(qemuArgs = it) },
                 label = { Text(stringResource(R.string.vs_qemu_args)) }, supportingText = { Text(stringResource(R.string.vs_qemu_args_sub)) },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
+            OutlinedTextField(value = s.straceServices, onValueChange = { s = s.copy(straceServices = it) },
+                label = { Text(stringResource(R.string.vs_strace)) }, placeholder = { Text("mediaserver,zygote") },
+                supportingText = { Text(stringResource(R.string.vs_strace_sub)) }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
             HardwarePicker(s.hardware) { s = s.copy(hardware = it) }
 
@@ -205,7 +216,8 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
                 Text(stringResource(R.string.vm_reset_data), color = MaterialTheme.colorScheme.error)
             }
             resetMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            Button(enabled = !resetting, onClick = { onSave(s) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.save)) }
+            val wifiOk = !s.wifi || (WifiEmu.cleanSsid(s.wifiSsid).isNotEmpty() && WifiEmu.passwordValid(s.wifiPassword))
+            Button(enabled = !resetting && wifiOk, onClick = { onSave(s) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.save)) }
             Spacer(Modifier.height(16.dp))
         }
     }
@@ -249,6 +261,25 @@ internal fun Toggle(title: String, sub: String, on: Boolean, set: (Boolean) -> U
     )
 }
 
+/** Name and optional password of the emulated Wi-Fi network (blank password = open network). */
+@Composable
+private fun WifiFields(s: VmSettings, set: (VmSettings) -> Unit) {
+    var show by remember { mutableStateOf(false) }
+    OutlinedTextField(value = s.wifiSsid, onValueChange = { set(s.copy(wifiSsid = WifiEmu.cleanSsid(it))) },
+        label = { Text(stringResource(R.string.vs_wifi_ssid)) }, singleLine = true,
+        isError = s.wifiSsid.isEmpty(),
+        supportingText = { Text(stringResource(if (s.wifiSsid.isEmpty()) R.string.vs_wifi_ssid_error else R.string.vs_wifi_ssid_sub)) },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
+    OutlinedTextField(value = s.wifiPassword, onValueChange = { set(s.copy(wifiPassword = WifiEmu.cleanPassword(it))) },
+        label = { Text(stringResource(R.string.vs_wifi_password)) }, singleLine = true,
+        isError = !WifiEmu.passwordValid(s.wifiPassword),
+        supportingText = { Text(stringResource(if (WifiEmu.passwordValid(s.wifiPassword)) R.string.vs_wifi_password_sub else R.string.vs_wifi_password_error)) },
+        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = { TextButton(onClick = { show = !show }) { Text(stringResource(if (show) R.string.vs_wifi_hide else R.string.vs_wifi_show)) } },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
+}
+
 /** Disabled / 0° / 180° / no-gyroscope list for the host motion sensors. */
 @Composable
 private fun GyroLockPicker(mode: Int, set: (Int) -> Unit) {
@@ -265,6 +296,28 @@ private fun GyroLockPicker(mode: Int, set: (Int) -> Unit) {
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                     labels.forEachIndexed { i, label ->
                         DropdownMenuItem(text = { Text(label) }, onClick = { open = false; set(i) })
+                    }
+                }
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** Radio technology the fake modem reports (2G ... LTE); only the values the firmware's API level knows are offered. */
+@Composable
+private fun NetworkTypePicker(tech: Int, api: Int, set: (Int) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.vs_network)) },
+        supportingContent = { Text(stringResource(R.string.vs_network_sub)) },
+        trailingContent = {
+            Box {
+                TextButton(onClick = { open = true }) { Text(NetworkType.label(NetworkType.sanitize(tech, api))) }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    NetworkType.available(api).forEach { e ->
+                        DropdownMenuItem(text = { Text(e.label) }, onClick = { open = false; set(e.tech) })
                     }
                 }
             }

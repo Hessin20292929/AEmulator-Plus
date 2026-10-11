@@ -113,6 +113,16 @@
     <string name="vs_advanced">Дополнительно</string>
     <string name="vs_qemu_args">Доп. параметры qemu</string>
     <string name="vs_qemu_args_sub">Пример: -d unimp DHD_TBFLUSH=2 (ИМЯ=значение становится переменной окружения)</string>
+    <string name="vs_wifi">Сеть Wi-Fi</string>
+    <string name="vs_wifi_sub">Показывает интернет хоста в ВМ как подключённую сеть Wi-Fi вместо Ethernet. Android 4.0–7.x. Применяется при следующей загрузке.</string>
+    <string name="vs_wifi_ssid">Имя сети (SSID)</string>
+    <string name="vs_wifi_ssid_sub">До 32 байт</string>
+    <string name="vs_wifi_ssid_error">Имя сети не может быть пустым</string>
+    <string name="vs_wifi_password">Пароль</string>
+    <string name="vs_wifi_password_sub">Пусто — открытая сеть. Для WPA2 нужно 8–63 символа.</string>
+    <string name="vs_wifi_password_error">Нужно 8–63 символа или оставьте пустым для открытой сети</string>
+    <string name="vs_wifi_show">Показать</string>
+    <string name="vs_wifi_hide">Скрыть</string>
     <string name="vs_hardware">ro.hardware</string>
     <string name="vs_hardware_default">По умолчанию для прошивки</string>
     <string name="vs_hardware_pick">Выбрать</string>
@@ -232,8 +242,6 @@
     <string name="catalog_load_failed">Не удалось загрузить каталог: %1$s</string>
     <string name="catalog_warnings">Некорректные или неполные данные каталога в строках: %1$s</string>
     <string name="browser_unavailable">Нет браузера для открытия этой ссылки.</string>
-    <string name="experimental_activated">Экспериментальные функции активированы!</string>
-    <string name="experimental_locked">Экспериментальные настройки камеры скрыты. Нажмите на заголовок AEmulator Plus 42 раза, чтобы открыть их.</string>
     <string name="m_minimize">Свернуть</string>
     <string name="open_vm">Открыть</string>
     <string name="vm_restarting">Перезапуск виртуальной машины…</string>

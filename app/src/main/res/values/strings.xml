@@ -114,6 +114,9 @@
     <string name="vs_dpi">DPI</string>
     <string name="vs_ram">Guest RAM</string>
     <string name="vs_ram_auto">Automatic</string>
+    <string name="vs_network">Reported network</string>
+    <string name="vs_network_sub">What the status bar shows: 2G to LTE. Default 2G, since not every firmware handles 3G or newer</string>
+    <string name="m_network">Network</string>
     <string name="vs_radio_title">Radio</string>
     <string name="vs_radio">Emulate radio module</string>
     <string name="vs_radio_sub">Telephony, IMEI and signal. Off: the firmware behaves like a Wi-Fi tablet</string>
@@ -128,6 +131,18 @@
     <string name="vs_advanced">Advanced</string>
     <string name="vs_qemu_args">Extra qemu options</string>
     <string name="vs_qemu_args_sub">Example: -d unimp DHD_TBFLUSH=2 (NAME=value becomes an environment variable)</string>
+    <string name="vs_strace">Trace system calls of services</string>
+    <string name="vs_strace_sub">Service names separated by commas, e.g. mediaserver,zygote. Slows those services down and writes the trace to their logs. Applies at the next boot.</string>
+    <string name="vs_wifi">Wi-Fi network</string>
+    <string name="vs_wifi_sub">Shows the host\'s internet to the VM as a connected Wi-Fi network instead of Ethernet. Android 4.0–7.x. Applies at the next boot.</string>
+    <string name="vs_wifi_ssid">Network name (SSID)</string>
+    <string name="vs_wifi_ssid_sub">Up to 32 bytes</string>
+    <string name="vs_wifi_ssid_error">The network name cannot be empty</string>
+    <string name="vs_wifi_password">Password</string>
+    <string name="vs_wifi_password_sub">Leave empty for an open network. WPA2 needs 8–63 characters.</string>
+    <string name="vs_wifi_password_error">Use 8–63 characters, or leave empty for an open network</string>
+    <string name="vs_wifi_show">Show</string>
+    <string name="vs_wifi_hide">Hide</string>
     <string name="vs_hardware">ro.hardware</string>
     <string name="vs_hardware_default">Firmware default</string>
     <string name="vs_hardware_pick">Choose</string>
@@ -250,8 +265,6 @@
     <string name="catalog_load_failed">Could not load the catalog: %1$s</string>
     <string name="catalog_warnings">Invalid or incomplete catalog data on lines: %1$s</string>
     <string name="browser_unavailable">No browser is available to open this link.</string>
-    <string name="experimental_activated">Experimental features activated!</string>
-    <string name="experimental_locked">Experimental camera settings are locked. Tap the AEmulator Plus title 42 times to unlock them.</string>
     <string name="m_minimize">Minimize</string>
     <string name="open_vm">Open</string>
     <string name="vm_restarting">Restarting virtual machine…</string>

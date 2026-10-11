@@ -237,8 +237,6 @@
     <string name="catalog_load_failed">Không thể tải danh mục: %1$s</string>
     <string name="catalog_warnings">Dữ liệu danh mục không hợp lệ hoặc chưa đầy đủ ở các dòng: %1$s</string>
     <string name="browser_unavailable">Không có trình duyệt nào để mở liên kết này.</string>
-    <string name="experimental_activated">Đã kích hoạt các tính năng thử nghiệm!</string>
-    <string name="experimental_locked">Cài đặt camera thử nghiệm đang bị khóa. Chạm vào tiêu đề AEmulator Plus 42 lần để mở khóa.</string>
     <string name="m_minimize">Thu nhỏ</string>
     <string name="open_vm">Mở</string>
     <string name="vm_restarting">Đang khởi động lại máy ảo…</string>

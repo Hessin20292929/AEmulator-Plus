@@ -645,7 +645,13 @@ class Importer(
                 e.isDirectory -> {}
                 // everything inside a system folder dump belongs to it (never scanned for boot.img etc.)
                 systemRel(sysRoot, n) != null -> {
-                    zip.getInputStream(e).use { writeFile(systemRel(sysRoot, n)!!, it, e.unixMode.takeIf { m -> m != 0 }) }
+                    val srel = systemRel(sysRoot, n)!!
+                    if (e.isUnixSymlink) {
+                        // a zip that kept its symlinks stores the target as the entry body; writing it as a file left
+                        // "sh" as a 4-byte text file ("Exec format error")
+                        val target = zip.getInputStream(e).use { String(it.readBytes(), Charsets.UTF_8) }.trim('\u0000', '\n', '\r')
+                        if (target.isNotEmpty()) symlinks.add(target to "/$srel")
+                    } else zip.getInputStream(e).use { writeFile(srel, it, e.unixMode.takeIf { m -> m != 0 }) }
                     gotSystem = true
                 }
                 // whole-disk image with a GPT inside the archive (Android Things iot_rpi3.img: 4.5 GB, deflated):
@@ -1718,6 +1724,8 @@ class Importer(
         for (d in listOf("system/bin", "system/xbin", "sbin", "vendor/bin", "system/vendor/bin")) {
             File(root, d).listFiles()?.forEach { if (it.isFile) it.setExecutable(true, false) }
         }
+        // zips made without symlink support leave "sh" containing the text "mksh" (see FlattenedLinks)
+        made += app.aemu.core.FlattenedLinks.repair(root, log)
         standardLinks()
         fun rootLink(name: String, target: String) {
             val f = File(root, name)

@@ -126,7 +126,12 @@ object InitPlan {
             // Honeycomb (3.x) ROMs run surfaceflinger as an init service (init.rc sets system_init.startsurfaceflinger 0),
             // so system_server waits for it forever; honour the service when the ROM declares it
             if (api in 1 until r.minApi && found == null) continue
-            val def = found?.let { toService(it, r) } ?: defaults(r.name, api, root)?.let {
+            // Some firmware exports lack the app_process -> app_process32 symlink, but init.zygote32.rc still names
+            // /system/bin/app_process. If only app_process32 exists, ignore the ramdisk's zygote definition and
+            // launch app_process32 (defaults() already builds that command line).
+            val zygote32Only = r.name == "zygote" &&
+                !File(root, "system/bin/app_process").isFile && File(root, "system/bin/app_process32").isFile
+            val def = found?.takeUnless { zygote32Only }?.let { toService(it, r) } ?: defaults(r.name, api, root)?.let {
                 it.copy(waitSocket = r.waitSocket, delayMs = r.delayMs, restart = r.restart)
             } ?: continue
             if (!File(root, def.argv.first().removePrefix("/")).isFile) continue

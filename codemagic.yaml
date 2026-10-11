@@ -1,0 +1,16 @@
+workflows:
+  plus-debug:
+    name: AEmulator Plus debug APK
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      java: 21
+    scripts:
+      - name: Point Gradle at the Android SDK
+        script: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+      - name: Accept SDK licenses
+        script: yes | sdkmanager --licenses || true
+      - name: Build debug APK
+        script: sh gradlew assembleDebug
+    artifacts:
+      - app/build/outputs/apk/debug/*.apk

@@ -320,6 +320,17 @@
     <string name="vm_import_oem">Import OEM partition</string>
     <string name="vm_import_oem_working">Reading OEM partition… Stop all VMs before importing.</string>
     <string name="vm_import_oem_done">OEM partition imported and mounted at /oem. System and data are unchanged.</string>
+    <string name="vm_import_vendor">Import vendor partition</string>
+    <string name="vm_import_vendor_working">Reading vendor partition… Stop all VMs before importing.</string>
+    <string name="vm_import_vendor_done">Vendor partition imported and mounted at /vendor. System and data are unchanged.</string>
+    <string name="vm_import_firmware">Import modem / firmware partition</string>
+    <string name="vm_import_firmware_working">Reading modem / firmware partition… Stop all VMs before importing.</string>
+    <string name="vm_import_firmware_done">Modem / firmware files imported to /firmware. The emulator has no baseband, so they are only visible to the guest. System and data are unchanged.</string>
+    <string name="vm_import_system">Replace system partition</string>
+    <string name="vm_import_system_title">Replace /system? (experimental)</string>
+    <string name="vm_import_system_warning">The current system is swapped for the one you pick. Boot, recovery, vendor, data and settings stay. The new system should be the same Android version and device family. If the VM stops booting, reset its data. Stop all VMs first. If the import fails, the old system is put back.</string>
+    <string name="vm_import_system_working">Reading system partition… This can take several minutes. Stop all VMs before importing.</string>
+    <string name="vm_import_system_done">System partition replaced and the VM was re-analysed. Data was kept; dalvik-cache was cleared.</string>
     <string name="as_tablet_navbar_rotation">Rotate tablet navbar</string>
     <string name="as_tablet_navbar_rotation_sub">Follow the tablet window rotation. Off keeps controls on the device’s natural bottom edge. Does not follow motion when host auto-rotate is off. Guest screen is never rotated or stretched by the host.</string>
     <string name="soc_warning_title">Chipset compatibility is unverified</string>

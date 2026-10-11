@@ -1,3 +1,4 @@
+/* Modified for AEmulator Plus, 2026-10-11: per-VM vendor / modem-firmware / system partition import. GPL-3.0; see LICENSE. */
 /* Modified for AEmulator Sunset, 2026-10-03: VM export, motion and host resolution.
  * GPL-3.0; upstream attribution retained in NOTICE.md. */
 package app.aemu.ui
@@ -197,6 +198,7 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
             Spacer(Modifier.height(8.dp))
             RecoverySection(img)
             OemImportSection(img, resetting) { resetting = it }
+            PartitionImportSection(img, resetting) { resetting = it }
 
             Spacer(Modifier.height(8.dp))
             OtaSection(img, resetting) { resetting = it }

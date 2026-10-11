@@ -1,3 +1,4 @@
+/* Modified for AEmulator Plus, 2026-10-11: per-VM vendor / modem-firmware / system partition import. GPL-3.0; see LICENSE. */
 /* AEmulator Sunset addition, 2026-10-03. GPL-3.0; see LICENSE. */
 package app.aemu.ui
 
@@ -100,4 +101,71 @@ internal fun OemImportSection(img: GuestImage, busy: Boolean, setBusy: (Boolean)
         picking = true; pickOem.launch(arrayOf("*/*"))
     }) { Text(stringResource(R.string.vm_import_oem)) }
     message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+}
+
+/**
+ * Added for AEmulator Plus: import of the vendor and modem/firmware partitions, and replacement of /system, for an
+ * existing VM. Shown under the OEM option in the VM settings; everything needs all VMs stopped.
+ */
+@Composable
+internal fun PartitionImportSection(img: GuestImage, busy: Boolean, setBusy: (Boolean) -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val dir = VmPaths(ctx, img.id).dir
+    var vendorPresent by remember { mutableStateOf(ExtraPartitionImport.present(dir, ExtraPartitionImport.Kind.VENDOR)) }
+    var firmwarePresent by remember { mutableStateOf(ExtraPartitionImport.present(dir, ExtraPartitionImport.Kind.FIRMWARE)) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    var confirmSystem by remember { mutableStateOf(false) }
+
+    fun launchImport(working: Int, done: Int, job: () -> Unit) {
+        setBusy(true)
+        message = ctx.getString(working)
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { job() } }
+            vendorPresent = ExtraPartitionImport.present(dir, ExtraPartitionImport.Kind.VENDOR)
+            firmwarePresent = ExtraPartitionImport.present(dir, ExtraPartitionImport.Kind.FIRMWARE)
+            setBusy(false)
+            message = result.fold({ ctx.getString(done) }, { ctx.getString(R.string.vm_import_failed, it.message.orEmpty()) })
+        }
+    }
+
+    val pickVendor = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        picking = false
+        if (uri != null) launchImport(R.string.vm_import_vendor_working, R.string.vm_import_vendor_done) {
+            ExtraPartitionImport.install(ctx, img.id, uri, ExtraPartitionImport.Kind.VENDOR)
+        }
+    }
+    val pickFirmware = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        picking = false
+        if (uri != null) launchImport(R.string.vm_import_firmware_working, R.string.vm_import_firmware_done) {
+            ExtraPartitionImport.install(ctx, img.id, uri, ExtraPartitionImport.Kind.FIRMWARE)
+        }
+    }
+    val pickSystem = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        picking = false
+        if (uri != null) launchImport(R.string.vm_import_system_working, R.string.vm_import_system_done) {
+            SystemPartitionImport.install(ctx, img.id, uri)
+        }
+    }
+
+    if (!vendorPresent) TextButton(enabled = !busy && !picking, modifier = Modifier.fillMaxWidth(), onClick = {
+        picking = true; pickVendor.launch(arrayOf("*/*"))
+    }) { Text(stringResource(R.string.vm_import_vendor)) }
+    if (!firmwarePresent) TextButton(enabled = !busy && !picking, modifier = Modifier.fillMaxWidth(), onClick = {
+        picking = true; pickFirmware.launch(arrayOf("*/*"))
+    }) { Text(stringResource(R.string.vm_import_firmware)) }
+    TextButton(enabled = !busy && !picking, modifier = Modifier.fillMaxWidth(), onClick = { confirmSystem = true }) {
+        Text(stringResource(R.string.vm_import_system))
+    }
+    message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    if (confirmSystem) AlertDialog(
+        onDismissRequest = { confirmSystem = false },
+        title = { Text(stringResource(R.string.vm_import_system_title)) },
+        text = { Text(stringResource(R.string.vm_import_system_warning)) },
+        dismissButton = { TextButton(onClick = { confirmSystem = false }) { Text(stringResource(R.string.cancel)) } },
+        confirmButton = { TextButton(onClick = {
+            confirmSystem = false; picking = true; pickSystem.launch(arrayOf("*/*"))
+        }) { Text(stringResource(R.string.vm_import_system)) } },
+    )
 }

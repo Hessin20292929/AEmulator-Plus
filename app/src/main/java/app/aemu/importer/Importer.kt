@@ -1,3 +1,4 @@
+/* Modified for AEmulator Plus, 2026-10-11: per-VM vendor / modem-firmware / system partition import. GPL-3.0; see LICENSE. */
 /* Modified for AEmulator Sunset, 2026-10-03: VM archive restore and boot retention.
  * GPL-3.0; see LICENSE and NOTICE.md. */
 package app.aemu.importer
@@ -329,24 +330,49 @@ class Importer(
      * Settings import of an OEM image into an existing VM: [image] is a raw / sparse ext, YAFFS2 or Moto-signed image,
      * [dest] a staging folder that gets "oem/…". The caller moves it into the VM only if this returns normally.
      */
-    internal fun importOemInto(image: File, dest: File) {
+    internal fun importOemInto(image: File, dest: File) = importPartitionInto(image, dest, "oem")
+
+    /**
+     * Modified for AEmulator Plus: the same settings import for any optional partition that is just a folder in the
+     * guest root (oem, vendor, firmware): [image] is read into "<mount>/…" under [dest].
+     */
+    internal fun importPartitionInto(image: File, dest: File, mount: String) {
         root = dest
-        File(dest, "oem").mkdirs()
+        File(dest, mount).mkdirs()
         FileChannel.open(image.toPath(), StandardOpenOption.READ).use { c ->
             val src = ChannelSource(c)
-            importImage(if (SparseSource.probe(src)) SparseSource(listOf(src)) else src, "oem")
+            importImage(if (SparseSource.probe(src)) SparseSource(listOf(src)) else src, mount)
         }
         for ((target, link) in symlinks) {
             val rel = link.trimStart('/')
-            if (!rel.startsWith("oem/")) continue
+            if (!rel.startsWith("$mount/")) continue
             val f = File(root, rel)
-            if (!f.canonicalPath.startsWith(File(root, "oem").canonicalPath)) continue
+            if (!f.canonicalPath.startsWith(File(root, mount).canonicalPath)) continue
             f.parentFile?.mkdirs()
             runCatching {
                 if (f.exists() || isLink(f)) { if (f.isDirectory && !isLink(f)) return@runCatching; f.delete() }
                 Os.symlink(relTarget(link, target), f.absolutePath)
             }
         }
+    }
+
+    /**
+     * Modified for AEmulator Plus: reads a /system partition image into "system/…" under [dest] for replacing the
+     * system of an existing VM, then applies the same links, modes and standard-link repairs as a full import.
+     * [vmPaths] is the VM being changed (the system layout / stock image records are written there).
+     * System-as-root images (the partition is the whole root file system) are refused: replacing only /system of
+     * such a VM would leave init and the sepolicy of the old firmware behind.
+     */
+    internal fun importSystemInto(image: File, dest: File, vmPaths: VmPaths) {
+        paths = vmPaths
+        root = dest
+        File(dest, "system").mkdirs()
+        FileChannel.open(image.toPath(), StandardOpenOption.READ).use { c ->
+            val src = ChannelSource(c)
+            importImage(if (SparseSource.probe(src)) SparseSource(listOf(src)) else src, "system")
+        }
+        if (systemAsRoot) throw IOException("system-as-root image: import the full firmware instead of replacing /system")
+        finishTree()
     }
 
     /** *.APP inside an archive: read in place when stored, otherwise through a temp file (the packets need random access). */

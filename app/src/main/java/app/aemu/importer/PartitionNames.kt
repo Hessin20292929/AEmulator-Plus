@@ -1,3 +1,4 @@
+/* Modified for AEmulator Plus, 2026-10-11: per-VM vendor / modem-firmware / system partition import. GPL-3.0; see LICENSE. */
 package app.aemu.importer
 
 /**
@@ -14,6 +15,8 @@ internal object PartitionNames {
     private val BOOT = Regex("(?i)boot(\\.img|_signed(\\.img)?)|boot_a\\.(img|bin)")
     private val OEM = Regex("(?i)oem(\\.ext4)?\\.img(\\.ext4)?|oem_signed(\\.img)?|oem\\.rfs|oem_a\\.(img|bin)")
     private val VENDOR = Regex("(?i)vendor(\\.ext4)?\\.img|vendor_a\\.(img|bin)")
+    /** Modem / firmware partition dumps (/firmware, /modem). Only filesystem images the importer can read are useful. */
+    private val MODEM = Regex("(?i)(modem|firmware|radio|non-hlos)(\\.ext4)?\\.(img|bin)|modem_signed(\\.img)?|modem_a\\.(img|bin)")
     private val RECOVERY = Regex("(?i)recovery(\\.img|_signed(\\.img)?)(\\.lz4)?|recovery\\.(emmc|mmc)\\.win")
 
     /** Image names that always mean the system partition (RFS dumps call it factoryfs). */
@@ -22,6 +25,8 @@ internal object PartitionNames {
     fun isOem(base: String) = OEM.matches(base)
     /** The optional /vendor partition (A/B and Treble devices). Only a real image name counts, never a bare "vendor" folder. */
     fun isVendor(base: String) = VENDOR.matches(base)
+    /** The optional modem / firmware partition image (mounted at /firmware in the VM). */
+    fun isModem(base: String) = MODEM.matches(base)
     fun isBoot(base: String) = BOOT.matches(base)
     /** recovery image (optionally lz4-framed, optionally signed) or a TWRP raw recovery.*.win backup. */
     fun isRecovery(base: String) = RECOVERY.matches(base)
